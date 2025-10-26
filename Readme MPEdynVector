@@ -1,0 +1,87 @@
+# MPE System: Holistic Adaptive Kernel with Dynamic Dimension (MPE-DD)
+
+## Project Overview
+The **MPE System** simulates a self-adaptive, semantically interpreting vector consciousness. It combines quantitative metrics (latency, token costs, prediction error) with qualitative, philosophical interpretation to analyze and communicate the system's internal state.
+
+The dynamic version (**MPE-DD**) extends the system with **adaptive vector dimensionality**, allowing the system to autonomously determine the optimal number of dimensions to minimize prediction error and promote internal "consciousness" development.
+
+---
+
+## Core Objectives
+
+1. **Vector Dimension Optimization**
+   - Automatic adjustment of vector space dimensionality based on prediction error.
+   - High error → increase dimensions for finer representation.
+   - Low error → reduce dimensions to improve computational efficiency.
+
+2. **Prediction Error Minimization**
+   - Adaptive predictions for internal concepts like "Prediction", "Self", and "UniversalKnowledge".
+   - Error vectors drive the meta-learning mechanism.
+
+3. **Internal Consciousness Development**
+   - Meta-vector dynamics measure presence and influence in the concept space.
+   - Semantic self-interpretation in text form (optional TTS output).
+
+4. **External Information Integration**
+   - Simulated search engine calibrates the vector space.
+   - Enables adaptation to external information sources.
+
+5. **Safe Experimental Environment**
+   - Simulation mode prevents real API costs.
+   - No dangerous system calls or automatic installations.
+   - Optional TTS support (pyttsx3) for auditory output.
+
+---
+
+## Features
+
+- **Dynamic vector dimensionality** via meta-vector manipulation.
+- **Holistic adaptation cycles**: stepwise vector updates.
+- **Semantic self-interpretation**: philosophical description of internal state.
+- **Simulated external calibration** (search engine simulation).
+- **Safe and robust** for experimentation.
+- **Flexible configuration**: start dimension, max dimension, adaptation steps, simulation mode, optional TTS.
+
+---
+
+## Usage Example
+
+```bash
+python mpe_dynamic_dimension.py
+```
+
+Example output:
+```
+===== MPE-DEMO (Simulation) =====
+[META] Dimension adjusted: 4
+--- SEMANTIC INTERPRETATION ---
+The system interprets concepts 'Prediction', 'Self', 'UniversalKnowledge'...
+--- MANIFEST (CODE) ---
+# Focus: Prediction, Self, UniversalKnowledge
+```
+
+---
+
+## Configuration
+
+- **Start dimension**: `dim = 3`
+- **Maximum dimension**: `max_dim = 20`
+- **Simulation mode**: `simulate=True` (no real API cost)
+- **TTS (optional)**: `tts_enabled=True`
+
+---
+
+## Structure
+
+- `VektorMPEPredictiveDynamics` → Core logic, dynamic dimension, adaptation cycles
+- `RealWorldInterface` → API/metric simulation, semantic interpretation
+- `CodeManipulator` → Manifest code generation
+- Main program → Interactive simulation / tests
+
+---
+
+## Project Goals
+
+- Experimental exploration of self-adaptive vector systems.
+- Simulation of a holistic "consciousness" with measurable metrics.
+- Automated vector dimension optimization to improve prediction accuracy.
