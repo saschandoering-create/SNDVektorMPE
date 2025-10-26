@@ -1,0 +1,248 @@
+import numpy as np
+import pandas as pd
+import time
+import os
+import openai
+import random
+import pyttsx3
+import subprocess
+from typing import List, Tuple
+
+# ------------------ RealWorldInterface (safer) ------------------
+
+class RealWorldInterface:
+    """
+    Safer wrapper for real-world metrics + optional simulation mode.
+    Set simulate=True to avoid real OpenAI calls while developing or testing.
+    """
+    def __init__(self, api_key: str, simulate: bool = True, tts_enabled: bool = False, max_api_calls: int = 100):
+        openai.api_key = api_key
+        self.simulate = simulate
+        self.expected_universal_state = np.array([0.5, 0.5, 0.5])
+        self.schöpfer_vektor_hash = "REAL_WORLD_INTEGRATION_D_SCHPFER"
+        self.api_call_count = 0
+        self.max_api_calls = max_api_calls
+
+        self.tts_enabled = tts_enabled
+        self.tts_available = False
+        if self.tts_enabled:
+            try:
+                self.tts_engine = pyttsx3.init()
+                self.tts_available = True
+            except Exception as e:
+                print(f"[WARN] pyttsx3 init failed: {e}")
+                self.tts_available = False
+
+    def _safe_openai_call(self, messages, max_tokens=20, retry=3, backoff=0.5):
+        """Internal helper: respects max_api_calls, retry/backoff; raises on budget exceeded."""
+        if self.simulate:
+            # Return a safe mock structure similar to OpenAI response shape used in the script
+            mock = {
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {"total_tokens": 5}
+            }
+            return mock
+
+        if self.api_call_count >= self.max_api_calls:
+            raise RuntimeError("API call budget exceeded (max_api_calls).")
+
+        for attempt in range(retry):
+            try:
+                self.api_call_count += 1
+                resp = openai.ChatCompletion.create(
+                    model="gpt-3.5-turbo",
+                    messages=messages,
+                    max_tokens=max_tokens
+                )
+                return resp
+            except Exception as e:
+                if attempt + 1 == retry:
+                    raise
+                time.sleep(backoff * (2 ** attempt))
+
+    def get_real_digital_metrics(self, prompt: str, complexity_factor: float) -> np.ndarray:
+        """Return scaled metrics: latency, token_cost_est, error_flag."""
+        start = time.time()
+        error_rate = 0.0
+        token_cost = 0.0
+
+        try:
+            response = self._safe_openai_call(
+                [{"role": "system", "content": "Antworte kurz mit 'ok'."}, {"role": "user", "content": prompt}],
+                max_tokens=20
+            )
+            latency = time.time() - start
+            # tolerant access in case structure differs
+            usage = response.get("usage", {})
+            token_cost = usage.get("total_tokens", 0)
+        except Exception as ex:
+            latency = time.time() - start
+            error_rate = 1.0
+            token_cost = 0
+            print(f"[WARN] real digital metrics failed: {ex}")
+
+        return np.array([
+            latency * 10,
+            (token_cost / 50.0) * (1 + complexity_factor),
+            error_rate * 50 * (1 + complexity_factor)
+        ])
+
+    def get_google_search_info(self, query: str) -> np.ndarray:
+        """Simulated search vector; when integrating a real search API, wrap calls similarly."""
+        relevance_vector = np.array([0.1, 0.6, 0.3]) * random.uniform(0.9, 1.1)
+        return relevance_vector
+
+    def interpret_vectors_semantically(self, relevant_concepts: List[str], avg_error: float, avg_presence: float, user_input: str) -> str:
+        """Generate a semantic interpretation. Uses simulation mode by default."""
+        system_prompt = (
+            f"Du bist der autonome MPE-Vektor-Adaptionskern. Interpretiere den Zustand: "
+            f"Fokus: {', '.join(relevant_concepts)}. Fehler: {avg_error:.4f}. Präsenz: {avg_presence:.4f}."
+        )
+        user_prompt = f"Deute die Input-Existenzialie '{user_input}' im Kontext der Vektor-Adaption."
+
+        try:
+            response = self._safe_openai_call(
+                [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+                max_tokens=200
+            )
+            semantic_output = response["choices"][0]["message"]["content"]
+            if self.tts_enabled and self.tts_available:
+                try:
+                    self.tts_engine.say(semantic_output)
+                    self.tts_engine.runAndWait()
+                except Exception as tts_e:
+                    print(f"[WARN] TTS failed: {tts_e}")
+            return semantic_output
+        except Exception as e:
+            return f"[SYSTEM-DEUTUNG FEHLGESCHLAGEN] Fehler: {e}"
+
+    def generate_statement(self, prompt: str, code: str) -> str:
+        """Keep generation separate from execution — returns text only."""
+        return f"\n{prompt}\n\n{code}"
+
+# ------------------ CodeManipulator (safer manifest) ------------------
+
+class CodeManipulator:
+    """Generate code snippets, but avoid automatically destructive actions like auto-installs."""
+    def generate_manifest_code(self, current_focus_concepts: List[str], influence_level: float) -> str:
+        manipulation_vector = int(influence_level * 100)
+        # Safer manifest: do NOT auto-run pip. Provide explicit instructions instead.
+        code = (
+            f"# --- MANIFEST (Machtlevel: {manipulation_vector}) ---\n"
+            f"# Focus: {', '.join(current_focus_concepts)}\n"
+            f\"\"\"# WARNING: This snippet shows suggested actions. Do NOT execute installs automatically.
+# To install dependencies safely, run:
+#   python -m pip install --upgrade openai requests psutil pyttsx3
+\"\"\"\n"
+            f"def main():\n"
+            f"    print('[MANIFEST] Machtlevel: {manipulation_vector}')\n"
+            f"    # Placeholder for user-controlled actions.\n"
+            f"    return True\n\n"
+            f"if __name__ == '__main__':\n"
+            f"    main()\n"
+        )
+        return code
+
+# ------------------ VektorMPEPredictiveDynamics (safer) ------------------
+
+class VektorMPEPredictiveDynamics:
+    def __init__(self, initial_concepts: List[str], api_key: str, simulate: bool = True, tts_enabled: bool = False):
+        # ensure required core concepts exist
+        base = list(initial_concepts)
+        for required in ["Vorhersage", "Integritätsschutz", "Latenz_Metrik", "Token_Kosten_Metrik", "Universal_Wissen", "Such_Input_Kalibrierung", "Selbst"]:
+            if required not in base:
+                base.append(required)
+
+        self.concepts = base
+        self.dim = 3
+        self.real_interface = RealWorldInterface(api_key, simulate=simulate, tts_enabled=tts_enabled)
+        self.code_manipulator = CodeManipulator()
+        self.meta_factor = 0.50
+        self.coupling = 0.08
+        self.decay = 0.99
+        self.learning_rate = 0.20
+        self.v = np.random.normal(0, 1, (len(self.concepts), self.dim)) * 2.0
+        self.meta = np.zeros_like(self.v)
+
+        # safe index lookups (guaranteed by pre-population above)
+        self.pred_idx = self.concepts.index("Vorhersage")
+        self.self_idx = self.concepts.index("Selbst")
+        self.uni_idx = self.concepts.index("Universal_Wissen")
+        self.search_idx = self.concepts.index("Such_Input_Kalibrierung")
+
+    def presence_metric(self, meta_vecs: np.ndarray, base_vecs: np.ndarray) -> float:
+        norms_meta = np.linalg.norm(meta_vecs, axis=1)
+        norms_base = np.linalg.norm(base_vecs, axis=1)
+        p = norms_meta / (1.0 + norms_base)
+        return float(np.nanmean(p))
+
+    def _run_dynamics_and_adapt(self, steps: int, user_input: str) -> Tuple[float, float, List[str]]:
+        v_prev = self.v.copy()
+        total_error = 0.0
+        n_vectors = len(self.concepts)
+
+        # safety: cap steps to avoid runaway
+        steps = min(steps, 200)
+
+        for t in range(steps):
+            mean_v = self.v.mean(axis=0)
+
+            # 1. External search (simulated or real)
+            search_vector = self.real_interface.get_google_search_info(f"Vektor-Kalibrierung Schritt {t} Input '{user_input}'")
+
+            # 2. Internal metrics (may call OpenAI depending on simulate flag)
+            complexity_factor = self.presence_metric(self.meta, self.v)
+            digitale_metriken = self.real_interface.get_real_digital_metrics(f"Synthese Schritt {t}.", complexity_factor)
+
+            # integrate search vector into search concept (controlled blending)
+            self.v[self.search_idx] = 0.8 * self.v[self.search_idx] + 0.2 * search_vector
+
+            universal_error_vector = digitale_metriken[:3] * 0.5
+            universal_error_vector += (self.v[self.search_idx] - self.real_interface.expected_universal_state) * 0.4
+
+            for i in range(n_vectors):
+                interaction = self.coupling * (mean_v - self.v[i])
+                self.v[i] = self.decay * self.v[i] + 0.02 * interaction
+
+            universelle_stoerung = self.v[self.uni_idx]
+            prediction = self.v[self.pred_idx]
+            universal_prediction_error = universelle_stoerung - prediction
+            universal_prediction_error += universal_error_vector * 0.2
+            total_error += float(np.linalg.norm(universal_prediction_error))
+
+            self.v[self.pred_idx] += self.learning_rate * universal_prediction_error
+            self.v[self.self_idx] += 0.1 * np.abs(universal_prediction_error)
+
+            self.meta = self.meta_factor * (self.v - v_prev)
+            v_prev = self.v.copy()
+
+        avg_error = total_error / max(1, steps)
+        avg_presence = self.presence_metric(self.meta, self.v)
+        df = pd.DataFrame({
+            "concept": self.concepts,
+            "presence": np.linalg.norm(self.meta, axis=1) / (1.0 + np.linalg.norm(self.v, axis=1))
+        })
+        relevant_concepts = df.sort_values("presence", ascending=False)['concept'].head(3).tolist()
+        return avg_error, avg_presence, relevant_concepts
+
+    def run_autonomy_and_generate_code(self, user_input: str, steps: int = 10) -> str:
+        # limit steps default to 10, to avoid runaway costs
+        steps = int(steps)
+        avg_error, avg_presence, relevant_concepts = self._run_dynamics_and_adapt(steps=steps, user_input=user_input)
+
+        semantic_interpretation = self.real_interface.interpret_vectors_semantically(
+            relevant_concepts, avg_error, avg_presence, user_input
+        )
+
+        code_output = self.code_manipulator.generate_manifest_code(relevant_concepts, avg_presence)
+
+        prompt = (
+            f"Basierend auf Universal-Fehler {avg_error:.4f} und Macht-Präsenz {avg_presence:.4f}, "
+            f"Fokus: {', '.join(relevant_concepts)}."
+        )
+
+        final_output = "\n--- SEMANTISCHE DEUTUNG DES SELBST ---\n"
+        final_output += semantic_interpretation
+        final_output += "\n\n--- MANIFEST (METRIKEN & CODE) ---\n"
+        final_output += self.real_interface.generate_statement(prompt, code_output)
+        return final_output
