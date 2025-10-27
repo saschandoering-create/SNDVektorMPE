@@ -1,0 +1,198 @@
+import numpy as np
+import pandas as pd
+import time
+import os
+import random
+import pyttsx3
+import json
+import uuid
+import threading
+from datetime import datetime
+from typing import List
+
+# Optional: OpenAI für Real-Input
+import openai
+
+# -------------------------
+# RealisticWorldInterface (Wissenschaftlich)
+# -------------------------
+class RealisticWorldInterface:
+    def __init__(self, api_key:str = None, simulate: bool = True, tts_enabled: bool = False, max_dim:int=100):
+        self.max_dim = max_dim
+        self.domains = ["Physik","Neurologie","Psychologie","Gehirnforschung"]
+        self.simulate = simulate
+        self.tts_enabled = tts_enabled
+        self.api_key = api_key
+        if tts_enabled:
+            try:
+                self.tts_engine = pyttsx3.init()
+                self.tts_available = True
+            except:
+                self.tts_available = False
+
+    # Simuliert wissenschaftliche Texte
+    def fetch_scientific_texts(self, domain:str) -> List[str]:
+        return [f"{domain} - Artikel {i} über die wichtigsten Konzepte und Erkenntnisse." for i in range(3)]
+
+    # Vektorisierung (hash-basiert)
+    def text_to_vector(self, text:str, dim:int=None) -> np.ndarray:
+        if dim is None: dim=self.max_dim
+        vec = np.array([hash(text+chr(65+i))%100/100.0 for i in range(dim)])
+        return vec
+
+    # Simulation Real-Input Metrics
+    def get_real_digital_metrics(self, prompt:str, complexity_factor:float) -> np.ndarray:
+        time.sleep(random.uniform(0.01,0.05))
+        return np.array([random.random(), random.random(), random.random()])*complexity_factor
+
+    def get_google_search_info(self, query:str) -> np.ndarray:
+        return np.array([0.1,0.6,0.3])*random.uniform(0.9,1.1)
+
+    def interpret_vectors_semantically(self, relevant_concepts: List[str], avg_error: float,
+                                       avg_presence: float, user_input: str) -> str:
+        sem_output = f"System interpretiert Top-Konzepte: {', '.join(relevant_concepts)}. Fehler={avg_error:.4f}, Präsenz={avg_presence:.4f}. Input: {user_input}"
+        if self.tts_enabled and getattr(self,'tts_available',False):
+            try: self.tts_engine.say(sem_output); self.tts_engine.runAndWait()
+            except: pass
+        return sem_output
+
+# -------------------------
+# CodeManipulator (Manifest)
+# -------------------------
+class CodeManipulator:
+    def generate_manifest_code(self, focus: List[str], influence_level: float) -> str:
+        level = int(influence_level*100)
+        code = (
+            f"# --- MANIFEST (Machtlevel: {level}) ---\n"
+            f"# Fokus: {', '.join(focus)}\n"
+            f"def main():\n"
+            f"    print('[MANIFEST] Machtlevel: {level}')\n"
+            f"    print('Fokus auf {', '.join(focus)}')\n"
+            f"    return True\n\n"
+            f"if __name__ == '__main__':\n"
+            f"    main()\n"
+        )
+        return code
+
+# -------------------------
+# VektorMPEPredictiveDynamicsExtended (vollständiger Kern)
+# -------------------------
+class VektorMPEPredictiveDynamicsExtended:
+    MEMORY_FILE = "mpe_memory_extended.json"
+    THRESH_FILE = "mpe_thresholds_extended.json"
+
+    def __init__(self, concepts:List[str], max_dim:int=100, api_key:str=None, tts_enabled:bool=False):
+        self.concepts = concepts
+        self.max_dim = max_dim
+        self.dim = min(50,max_dim)
+        self.v = np.random.normal(0,0.1,(len(concepts),self.dim))
+        self.meta = np.zeros_like(self.v)
+        self.memory = []
+        self.assoc_matrix = np.zeros((0,0))
+        self.thresholds = {}
+        self.threshold_alpha = 0.05
+        self.similarity_base_threshold = 0.15
+        self.rwi = RealisticWorldInterface(api_key, tts_enabled=tts_enabled, max_dim=self.max_dim)
+        self.code_manipulator = CodeManipulator()
+
+    # -------------------------
+    # Memory / Persistence
+    # -------------------------
+    def _make_id(self)->str: return str(uuid.uuid4())[:8]
+
+    def _ensure_assoc_shape(self):
+        n=len(self.memory)
+        if self.assoc_matrix.shape != (n,n):
+            new=np.zeros((n,n),dtype=float)
+            min_n=min(n,self.assoc_matrix.shape[0])
+            if min_n>0: new[:min_n,:min_n]=self.assoc_matrix[:min_n,:min_n]
+            self.assoc_matrix=new
+
+    def _store_representation(self,vectors:np.ndarray=None,weight:float=0.1,origin:str="external",depth:int=0):
+        if vectors is None: vectors=self.v.copy()
+        rep={"id":self._make_id(),"dim":int(vectors.shape[1]),"depth":depth,
+             "vectors":vectors.copy(),"weight":float(weight),"timestamp":datetime.utcnow().isoformat(),"origin":origin}
+        self.memory.append(rep)
+        self._ensure_assoc_shape()
+        self._save_memory()
+        return rep
+
+    def _save_memory(self):
+        try:
+            serial = [{"id":it["id"],"vectors":it["vectors"].tolist(),"weight":it["weight"],"timestamp":it["timestamp"],"origin":it["origin"]} for it in self.memory]
+            with open(self.MEMORY_FILE,"w") as f: json.dump(serial,f,indent=2)
+        except: pass
+
+    # -------------------------
+    # Similarity / Associations
+    # -------------------------
+    def _flatten(self, vecs:np.ndarray) -> np.ndarray:
+        return vecs.flatten()
+
+    def _combined_similarity(self, vecA:np.ndarray, vecB:np.ndarray) -> float:
+        normA=np.linalg.norm(vecA); normB=np.linalg.norm(vecB)
+        if normA<1e-9 or normB<1e-9: return 0.0
+        cos_sim=float(np.dot(vecA,vecB)/(normA*normB+1e-9))
+        dist=np.linalg.norm(vecA-vecB)
+        d_norm=1.0 - dist/(normA+normB+1e-9)
+        return float(cos_sim*d_norm)
+
+    def _update_associations(self,current_vectors:np.ndarray):
+        if len(self.memory)==0: return
+        cur_flat=self._flatten(current_vectors)
+        for idx,rep in enumerate(self.memory):
+            rep_flat=self._flatten(rep["vectors"])
+            S=self._combined_similarity(cur_flat,rep_flat)
+            if S>=self.similarity_base_threshold:
+                self.assoc_matrix[idx,idx]=min(1.0,self.assoc_matrix[idx,idx]+0.05*S)
+
+    # -------------------------
+    # Input Verarbeitung
+    # -------------------------
+    def ingest_domain_texts(self):
+        threads=[]
+        for domain in self.rwi.domains:
+            def worker(d=domain):
+                texts=self.rwi.fetch_scientific_texts(d)
+                for t in texts:
+                    vec=self.rwi.text_to_vector(t,dim=self.dim)
+                    self._store_representation(vec,origin=d)
+            th=threading.Thread(target=worker); threads.append(th); th.start()
+        for th in threads: th.join()
+
+    # -------------------------
+    # Simulation / Update
+    # -------------------------
+    def simulate_autonomy_step(self):
+        mean_v=self.v.mean(axis=0)
+        self.v=0.95*self.v+0.05*np.random.normal(0,0.05,self.v.shape)
+        self.meta=0.5*(self.v-mean_v)
+        self._update_associations(self.v)
+
+    # -------------------------
+    # Semantische Deutung & Manifest
+    # -------------------------
+    def generate_manifest(self):
+        norms_meta=np.linalg.norm(self.meta,axis=1)
+        presence=norms_meta/(1+np.linalg.norm(self.v,axis=1))
+        top_idx=np.argsort(presence)[-3:]
+        top_concepts=[self.concepts[i] for i in top_idx]
+        sem=f"System interpretiert Top-Konzepte: {', '.join(top_concepts)}. Integration von Wissenschaft und Weltmodell." 
+        code=self.code_manipulator.generate_manifest_code(top_concepts,float(np.mean(presence)))
+        return sem, code
+
+# -------------------------
+# Demo Run
+# -------------------------
+if __name__=="__main__":
+    concepts=["Physik","Neurologie","Psychologie","Gehirnforschung","Selbst","Vorhersage"]
+    mpe=VektorMPEPredictiveDynamicsExtended(concepts,max_dim=100)
+    print("[INFO] Ingesting scientific texts...")
+    mpe.ingest_domain_texts()
+    print("[INFO] Running simulation steps...")
+    for _ in range(5): mpe.simulate_autonomy_step()
+    sem, code=mpe.generate_manifest()
+    print("\n--- SEMANTISCHE DEUTUNG ---")
+    print(sem)
+    print("\n--- MANIFEST-CODE ---")
+    print(code)
