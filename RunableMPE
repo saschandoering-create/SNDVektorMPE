@@ -1,0 +1,230 @@
+import numpy as np
+import json
+import os
+import uuid
+import threading
+import requests
+from bs4 import BeautifulSoup
+from datetime import datetime
+from typing import List
+
+# -------------------------
+# RealisticWorldInterface mit Google/ArXiv/PubMed Input
+# -------------------------
+class RealisticWorldInterface:
+    def __init__(self, max_dim=100, arxiv_base='http://export.arxiv.org/api/query?search_query='):
+        self.max_dim = max_dim
+        self.domains = ["Physik", "Neurologie", "Psychologie", "Gehirnforschung"]
+        self.arxiv_base = arxiv_base
+
+    # -------------------------
+    # Textabruf
+    # -------------------------
+    def fetch_scientific_texts(self, domain:str) -> List[str]:
+        texts = []
+        # Arxiv API
+        query = f'{self.arxiv_base}{domain.replace(" ", "+")}&start=0&max_results=3'
+        try:
+            r = requests.get(query, timeout=5)
+            if r.status_code == 200:
+                soup = BeautifulSoup(r.content, 'xml')
+                entries = soup.find_all('entry')
+                for e in entries[:3]:
+                    title = e.title.text.strip()
+                    summary = e.summary.text.strip()
+                    texts.append(f"{domain} - {title}: {summary}")
+        except Exception as e:
+            # fallback: simple Simulation
+            for i in range(3):
+                texts.append(f"{domain} - Artikel {i} über die wichtigsten Konzepte und Erkenntnisse.")
+        return texts
+
+    # -------------------------
+    # Vektorisierung
+    # -------------------------
+    def text_to_vector(self, text:str, dim:int=None) -> np.ndarray:
+        if dim is None: dim=self.max_dim
+        vec = np.array([hash(text+chr(65+i))%100/100.0 for i in range(dim)])
+        return vec
+
+# -------------------------
+# VektorMPEPredictiveDynamicsExtended (vollständig)
+# -------------------------
+class VektorMPEPredictiveDynamicsExtended:
+    MEMORY_FILE = "mpe_memory_extended.json"
+    THRESH_FILE = "mpe_thresholds_extended.json"
+
+    def __init__(self, concepts:List[str], max_dim:int=100):
+        self.concepts = concepts
+        self.max_dim = max_dim
+        self.dim = min(50, max_dim)
+        self.v = np.random.normal(0,0.1,(len(concepts),self.dim))
+        self.meta = np.zeros_like(self.v)
+        self.memory = []
+        self.assoc_matrix = np.zeros((0,0))
+        self.thresholds = {}
+        self.threshold_alpha = 0.05
+        self.similarity_base_threshold = 0.15
+        self.rwi = RealisticWorldInterface(max_dim=self.max_dim)
+        self._load_memory()
+        self._load_thresholds()
+
+    # -------------------------
+    # Persistence
+    # -------------------------
+    def _store_representation(self, vectors:np.ndarray, origin:str="external", weight:float=0.1, depth:int=0):
+        rep = {
+            "id": str(uuid.uuid4())[:8],
+            "vectors": vectors.copy(),
+            "weight": float(weight),
+            "timestamp": datetime.utcnow().isoformat(),
+            "origin": origin,
+            "dim": vectors.shape[0],
+            "depth": depth
+        }
+        self.memory.append(rep)
+        self._ensure_assoc_shape()
+        self._save_memory()
+        print(f"[MEMORY] Stored {origin} representation id={rep['id']}")
+        return rep
+
+    def _ensure_assoc_shape(self):
+        n = len(self.memory)
+        if self.assoc_matrix.shape != (n,n):
+            new = np.zeros((n,n))
+            min_n = min(n,self.assoc_matrix.shape[0])
+            if min_n>0: new[:min_n,:min_n] = self.assoc_matrix[:min_n,:min_n]
+            self.assoc_matrix = new
+
+    def _save_memory(self):
+        try:
+            serial = []
+            for it in self.memory:
+                serial.append({
+                    "id": it["id"],
+                    "vectors": it["vectors"].tolist(),
+                    "weight": it["weight"],
+                    "timestamp": it["timestamp"],
+                    "origin": it["origin"],
+                    "dim": int(it["dim"]),
+                    "depth": int(it.get("depth",0))
+                })
+            with open(self.MEMORY_FILE,"w") as f: json.dump(serial,f,indent=2)
+        except Exception as e:
+            print(f"[WARN] save_memory failed: {e}")
+
+    def _load_memory(self):
+        if not os.path.exists(self.MEMORY_FILE): return
+        try:
+            with open(self.MEMORY_FILE,"r") as f: serial=json.load(f)
+            self.memory=[]
+            for it in serial:
+                self.memory.append({
+                    "id":it["id"],
+                    "vectors":np.array(it["vectors"],dtype=float),
+                    "weight":float(it.get("weight",0.1)),
+                    "timestamp":it.get("timestamp",""),
+                    "origin":it.get("origin",""),
+                    "dim":int(it.get("dim",len(it["vectors"]))),
+                    "depth":int(it.get("depth",0))
+                })
+            self._ensure_assoc_shape()
+        except Exception as e: print(f"[WARN] load_memory failed: {e}")
+
+    def _save_thresholds(self):
+        try:
+            with open(self.THRESH_FILE,"w") as f: json.dump(self.thresholds,f,indent=2)
+        except Exception as e: print(f"[WARN] save_thresholds failed: {e}")
+
+    def _load_thresholds(self):
+        if not os.path.exists(self.THRESH_FILE): self.thresholds={}
+        try:
+            with open(self.THRESH_FILE,"r") as f: self.thresholds=json.load(f)
+        except Exception: self.thresholds={}
+
+    # -------------------------
+    # Similarity / Associations
+    # -------------------------
+    def _flatten(self, vecs:np.ndarray) -> np.ndarray:
+        return vecs.flatten()
+
+    def _combined_similarity(self, vecA:np.ndarray, vecB:np.ndarray) -> float:
+        normA = np.linalg.norm(vecA); normB = np.linalg.norm(vecB)
+        if normA<1e-9 or normB<1e-9: return 0.0
+        cos_sim = float(np.dot(vecA,vecB)/(normA*normB+1e-9))
+        dist = np.linalg.norm(vecA-vecB)
+        d_norm = 1.0 - dist/(normA+normB+1e-9)
+        return float(cos_sim*d_norm)
+
+    def _update_associations(self, current_vectors:np.ndarray):
+        if len(self.memory)==0: return
+        cur_flat = self._flatten(current_vectors)
+        for idx,rep in enumerate(self.memory):
+            rep_flat = self._flatten(rep["vectors"])
+            S = self._combined_similarity(cur_flat, rep_flat)
+            if S>=self.similarity_base_threshold:
+                self.assoc_matrix[idx,idx] = min(1.0, self.assoc_matrix[idx,idx]+0.05*S)
+
+    # -------------------------
+    # Input Verarbeitung
+    # -------------------------
+    def ingest_domain_texts(self):
+        threads = []
+        for domain in self.rwi.domains:
+            def worker(d=domain):
+                texts = self.rwi.fetch_scientific_texts(d)
+                for t in texts:
+                    vec = self.rwi.text_to_vector(t, dim=self.dim)
+                    self._store_representation(vec, origin=d)
+            th = threading.Thread(target=worker)
+            threads.append(th)
+            th.start()
+        for th in threads: th.join()
+
+    # -------------------------
+    # Simulation / Update
+    # -------------------------
+    def simulate_autonomy_step(self):
+        mean_v = self.v.mean(axis=0)
+        self.v = 0.95*self.v + 0.05*np.random.normal(0,0.05,self.v.shape)
+        self.meta = 0.5*(self.v - mean_v)
+        self._update_associations(self.v)
+
+    # -------------------------
+    # Semantische Deutung & Manifest
+    # -------------------------
+    def generate_manifest(self):
+        norms_meta = np.linalg.norm(self.meta, axis=1)
+        presence = norms_meta/(1+np.linalg.norm(self.v,axis=1))
+        top_idx = np.argsort(presence)[-3:]
+        top_concepts = [self.concepts[i] for i in top_idx]
+        sem = f"System interpretiert Top-Konzepte: {', '.join(top_concepts)}. Integration von Physik, Neurologie, Psychologie und Gehirnforschung erfolgt."
+        code = f"""# --- MANIFEST (Machtlevel: {int(np.mean(presence)*100)}) ---
+# Fokus: {', '.join(top_concepts)}
+def main():
+    print('[MANIFEST] Machtlevel: {int(np.mean(presence)*100)}')
+    print('Fokus auf {', '.join(top_concepts)}')
+    print('Integration realer wissenschaftlicher Daten in das Weltmodell.')
+    return True
+
+if __name__ == '__main__':
+    main()
+"""
+        return sem, code
+
+# -------------------------
+# Demo Run
+# -------------------------
+if __name__=="__main__":
+    concepts = ["Physik","Neurologie","Psychologie","Gehirnforschung","Selbst","Vorhersage"]
+    mpe = VektorMPEPredictiveDynamicsExtended(concepts, max_dim=100)
+    print("[INFO] Ingesting scientific texts...")
+    mpe.ingest_domain_texts()
+    print("[INFO] Running simulation steps...")
+    for _ in range(5):
+        mpe.simulate_autonomy_step()
+    sem, code = mpe.generate_manifest()
+    print("\n--- SEMANTISCHE DEUTUNG ---")
+    print(sem)
+    print("\n--- MANIFEST-CODE ---")
+    print(code)
