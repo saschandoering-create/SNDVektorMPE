@@ -1,0 +1,598 @@
+# mpe_vektor_dynamics_with_associations.py
+import numpy as np
+import pandas as pd
+import time
+import os
+import random
+import pyttsx3
+import json
+from typing import List, Tuple
+from datetime import datetime
+import uuid
+
+# Optional: Nur aktivieren, wenn echte API-Calls gewollt
+import openai
+
+# ==============================================================================
+# 1. REAL-WORLD INTERFACE (digitale Sensorik & API)
+# ==============================================================================
+
+class RealWorldInterface:
+    def __init__(self, api_key: str, simulate: bool = True, tts_enabled: bool = False, max_api_calls: int = 50):
+        openai.api_key = api_key
+        self.simulate = simulate
+        self.api_call_count = 0
+        self.max_api_calls = max_api_calls
+        self.expected_universal_state = np.array([0.5, 0.5, 0.5])
+
+        self.tts_enabled = tts_enabled
+        self.tts_available = False
+        if self.tts_enabled:
+            try:
+                self.tts_engine = pyttsx3.init()
+                self.tts_available = True
+            except Exception as e:
+                print(f"[WARNUNG] TTS konnte nicht initialisiert werden: {e}")
+
+    def _safe_openai_call(self, messages, max_tokens=20):
+        if self.simulate:
+            time.sleep(random.uniform(0.02, 0.08))
+            return {"choices": [{"message": {"content": "ok"}}], "usage": {"total_tokens": 10}}
+        if self.api_call_count >= self.max_api_calls:
+            raise RuntimeError("API-Aufrufbudget überschritten!")
+        self.api_call_count += 1
+        return openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=messages,
+            max_tokens=max_tokens
+        )
+
+    def get_real_digital_metrics(self, prompt: str, complexity_factor: float) -> np.ndarray:
+        start = time.time()
+        error_rate, token_cost = 0.0, 0.0
+        try:
+            response = self._safe_openai_call(
+                [{"role": "system", "content": "Antworte kurz mit 'ok'."},
+                 {"role": "user", "content": prompt}],
+                max_tokens=20
+            )
+            latency = time.time() - start
+            token_cost = response.get("usage", {}).get("total_tokens", 0)
+        except Exception as e:
+            latency = time.time() - start
+            error_rate = 1.0
+
+        return np.array([
+            latency * 10,
+            (token_cost / 50.0) * (1 + complexity_factor),
+            error_rate * 50 * (1 + complexity_factor)
+        ])
+
+    def get_google_search_info(self, query: str) -> np.ndarray:
+        return np.array([0.1, 0.6, 0.3]) * random.uniform(0.9, 1.1)
+
+    def interpret_vectors_semantically(self, relevant_concepts: List[str], avg_error: float,
+                                       avg_presence: float, user_input: str) -> str:
+        system_prompt = (f"Du bist ein philosophischer Systemkern. "
+                         f"Fokus: {', '.join(relevant_concepts)}. "
+                         f"Fehler: {avg_error:.4f}, Präsenz: {avg_presence:.4f}.")
+        user_prompt = f"Deute den Input '{user_input}' abstrakt."
+        try:
+            response = self._safe_openai_call(
+                [{"role": "system", "content": system_prompt},
+                 {"role": "user", "content": user_prompt}],
+                max_tokens=150
+            )
+            output = response["choices"][0]["message"]["content"]
+        except Exception as e:
+            output = f"[SEMANTISCHE DEUTUNG FEHLGESCHLAGEN] Fehler: {e}"
+
+        if self.tts_enabled and self.tts_available:
+            try:
+                self.tts_engine.say(output)
+                self.tts_engine.runAndWait()
+            except Exception:
+                pass
+
+        return output
+
+    def generate_statement(self, prompt: str, code: str) -> str:
+        return f"\n{prompt}\n\n{code}"
+
+
+# ==============================================================================
+# 2. CODE-MANIPULATOR (sicher)
+# ==============================================================================
+
+class CodeManipulator:
+    def generate_manifest_code(self, focus: List[str], influence_level: float) -> str:
+        level = int(influence_level * 100)
+        code = (
+            f"# --- MANIFEST (Machtlevel: {level}) ---\n"
+            f"# Fokus: {', '.join(focus)}\n"
+            f"def main():\n"
+            f"    print('[MANIFEST] Machtlevel: {level}')\n"
+            f"    print('>> Externe Kalibrierung abgeschlossen.')\n"
+            f"    return True\n\n"
+            f"if __name__ == '__main__':\n"
+            f"    main()\n"
+        )
+        return code
+
+
+# ==============================================================================
+# 3. MPE-VEKTOR-DYNAMIK MIT ASSOZIATIONEN, INTERNER ANREGUNG UND ADAPTIVEN THRESHOLDS
+# ==============================================================================
+
+class VektorMPEPredictiveDynamics:
+    MEMORY_FILE = "mpe_memory.json"
+    ASSOC_FILE = "mpe_assocs.json"
+    THRESH_FILE = "mpe_thresholds.json"
+
+    def __init__(self, initial_concepts: List[str], api_key: str,
+                 simulate: bool = True, tts_enabled: bool = False,
+                 max_dim: int = 50, persist_memory: bool = True):
+        # Basisbegriffe sicherstellen
+        required = ["Vorhersage", "Integritätsschutz", "Latenz_Metrik",
+                    "Token_Kosten_Metrik", "Universal_Wissen",
+                    "Such_Input_Kalibrierung", "Selbst"]
+        for r in required:
+            if r not in initial_concepts:
+                initial_concepts.append(r)
+
+        self.concepts = initial_concepts
+        self.max_dim = max_dim
+        self.dim = 3  # Startdimensionalität
+        self.real_interface = RealWorldInterface(api_key, simulate, tts_enabled)
+        self.code_manipulator = CodeManipulator()
+
+        # Hyperparameter
+        self.meta_factor = 0.5
+        self.coupling = 0.08
+        self.decay = 0.99
+        self.learning_rate = 0.2
+
+        # Zustände
+        self.v = np.random.normal(0, 1, (len(self.concepts), self.dim))
+        self.meta = np.zeros_like(self.v)
+
+        # Indexe
+        self.pred_idx = self.concepts.index("Vorhersage")
+        self.self_idx = self.concepts.index("Selbst")
+        self.uni_idx = self.concepts.index("Universal_Wissen")
+        self.search_idx = self.concepts.index("Such_Input_Kalibrierung")
+
+        # Memory und Assoziationen
+        # memory: list of dicts with id, dim, lengths, vectors, weight, timestamp, origin, depth
+        self.memory = []
+        # associations: list of dicts {from_id, to_id, weight, avg_path (vector diff), created_at}
+        self.associations = []
+        self.persist_memory = persist_memory
+        if self.persist_memory:
+            self._load_memory()
+            self._load_associations()
+            self._load_thresholds()
+
+        # Lernparameter für Memory-Mechanik
+        self.similarity_threshold = 0.25   # initial global fallback
+        self.weight_alpha = 0.1
+        self.insight_weight_threshold = 0.6
+
+        # adaptive thresholds per (dim, depth)
+        # stored as dict with key "dim:depth" -> float
+        self.thresholds = {}  # initial leer -> beim Bedarf angelegt
+        self.threshold_alpha = 0.05  # EMA update für thresholds
+
+    # -------------------------
+    # Persistenz Hilfen
+    # -------------------------
+    def _save_memory(self):
+        if not self.persist_memory:
+            return
+        try:
+            serial = []
+            for it in self.memory:
+                serial.append({
+                    "id": it["id"],
+                    "dim": int(it["dim"]),
+                    "lengths": [float(x) for x in it["lengths"]],
+                    "vectors": [list(map(float, row)) for row in it["vectors"]],
+                    "weight": float(it["weight"]),
+                    "timestamp": it["timestamp"],
+                    "origin": it.get("origin", "external"),
+                    "depth": int(it.get("depth", 0))
+                })
+            with open(self.MEMORY_FILE, "w", encoding="utf-8") as f:
+                json.dump(serial, f, indent=2)
+        except Exception as e:
+            print(f"[WARN] Memory konnte nicht gespeichert werden: {e}")
+
+    def _load_memory(self):
+        if not os.path.exists(self.MEMORY_FILE):
+            return
+        try:
+            with open(self.MEMORY_FILE, "r", encoding="utf-8") as f:
+                serial = json.load(f)
+            self.memory = []
+            for it in serial:
+                self.memory.append({
+                    "id": it["id"],
+                    "dim": int(it["dim"]),
+                    "lengths": np.array(it["lengths"], dtype=float),
+                    "vectors": np.array(it["vectors"], dtype=float),
+                    "weight": float(it["weight"]),
+                    "timestamp": it.get("timestamp", ""),
+                    "origin": it.get("origin", "external"),
+                    "depth": int(it.get("depth", 0))
+                })
+        except Exception as e:
+            print(f"[WARN] Memory konnte nicht geladen werden: {e}")
+
+    def _save_associations(self):
+        if not self.persist_memory:
+            return
+        try:
+            serial = []
+            for a in self.associations:
+                serial.append({
+                    "from": a["from"],
+                    "to": a["to"],
+                    "weight": float(a["weight"]),
+                    "avg_path": [list(map(float, row)) for row in (a["avg_path"].tolist() if isinstance(a["avg_path"], np.ndarray) else a["avg_path"])],
+                    "created_at": a["created_at"]
+                })
+            with open(self.ASSOC_FILE, "w", encoding="utf-8") as f:
+                json.dump(serial, f, indent=2)
+        except Exception as e:
+            print(f"[WARN] Associations konnten nicht gespeichert werden: {e}")
+
+    def _load_associations(self):
+        if not os.path.exists(self.ASSOC_FILE):
+            return
+        try:
+            with open(self.ASSOC_FILE, "r", encoding="utf-8") as f:
+                serial = json.load(f)
+            self.associations = []
+            for a in serial:
+                self.associations.append({
+                    "from": a["from"],
+                    "to": a["to"],
+                    "weight": float(a["weight"]),
+                    "avg_path": np.array(a["avg_path"], dtype=float),
+                    "created_at": a.get("created_at", "")
+                })
+        except Exception as e:
+            print(f"[WARN] Associations konnten nicht geladen werden: {e}")
+
+    def _save_thresholds(self):
+        if not self.persist_memory:
+            return
+        try:
+            with open(self.THRESH_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.thresholds, f, indent=2)
+        except Exception as e:
+            print(f"[WARN] Thresholds konnten nicht gespeichert werden: {e}")
+
+    def _load_thresholds(self):
+        if not os.path.exists(self.THRESH_FILE):
+            self.thresholds = {}
+            return
+        try:
+            with open(self.THRESH_FILE, "r", encoding="utf-8") as f:
+                self.thresholds = json.load(f)
+            # convert keys to str->float values already are floats
+        except Exception as e:
+            print(f"[WARN] Thresholds konnten nicht geladen werden: {e}")
+            self.thresholds = {}
+
+    # -------------------------
+    # Memory API
+    # -------------------------
+    def _current_lengths(self) -> np.ndarray:
+        return np.linalg.norm(self.v, axis=1)
+
+    def _make_id(self) -> str:
+        return str(uuid.uuid4())[:8]
+
+    def _store_representation(self, vectors: np.ndarray = None, weight: float = 0.1, origin: str = "external", depth: int = 0):
+        if vectors is None:
+            vectors = self.v.copy()
+        lengths = np.linalg.norm(vectors, axis=1)
+        item = {
+            "id": self._make_id(),
+            "dim": int(vectors.shape[1]),
+            "lengths": lengths,
+            "vectors": vectors.copy(),
+            "weight": float(weight),
+            "timestamp": datetime.utcnow().isoformat(),
+            "origin": origin,
+            "depth": int(depth)
+        }
+        self.memory.append(item)
+        self._save_memory()
+        print(f"[MEMORY] Repräsentation gespeichert id={item['id']} dim={item['dim']} origin={origin} depth={depth} weight={weight:.3f}")
+        return item
+
+    # -------------------------
+    # Threshold-Mechanik
+    # -------------------------
+    def _threshold_key(self, dim: int, depth: int) -> str:
+        return f"{dim}:{depth}"
+
+    def _get_threshold(self, dim: int, depth: int, default: float = 0.12) -> float:
+        key = self._threshold_key(dim, depth)
+        if key not in self.thresholds:
+            self.thresholds[key] = default
+        return float(self.thresholds[key])
+
+    def _update_threshold(self, dim: int, depth: int, observed_error: float):
+        key = self._threshold_key(dim, depth)
+        old = float(self.thresholds.get(key, observed_error))
+        new = (1.0 - self.threshold_alpha) * old + self.threshold_alpha * observed_error
+        # optional: leichte Tendenz, bei stabil kleinen Fehlern threshold zu senken
+        self.thresholds[key] = float(new * 0.98 if observed_error < old else new * 1.02)
+        self._save_thresholds()
+
+    # -------------------------
+    # Assoziations-Mechanik
+    # -------------------------
+    def _find_similar_reps(self, lengths: np.ndarray) -> List[dict]:
+        candidates = []
+        for rep in self.memory:
+            if rep["dim"] != lengths.shape[0]:
+                continue
+            rep_lengths = np.array(rep["lengths"], dtype=float)
+            diff = lengths - rep_lengths
+            normed = np.linalg.norm(diff) / max(1.0, np.linalg.norm(rep_lengths))
+            candidates.append((normed, rep))
+        candidates.sort(key=lambda x: x[0])
+        # return all for potential further processing (caller filters by thresholds)
+        return [r for d, r in candidates]
+
+    def _create_or_update_association(self, from_rep: dict, to_rep: dict, path_vector: np.ndarray, initial_weight: float = 0.05):
+        # Suche bestehende Kante
+        for a in self.associations:
+            if a["from"] == from_rep["id"] and a["to"] == to_rep["id"]:
+                # Update avg_path und weight via EMA
+                a["avg_path"] = 0.9 * a["avg_path"] + 0.1 * path_vector
+                a["weight"] = min(1.0, a["weight"] + 0.01)  # kleine Verstärkung
+                a["created_at"] = datetime.utcnow().isoformat()
+                self._save_associations()
+                return a
+        # Neue Kante
+        assoc = {
+            "from": from_rep["id"],
+            "to": to_rep["id"],
+            "weight": float(initial_weight),
+            "avg_path": path_vector.copy(),
+            "created_at": datetime.utcnow().isoformat()
+        }
+        self.associations.append(assoc)
+        self._save_associations()
+        print(f"[ASSOC] Neu: {from_rep['id']} -> {to_rep['id']} (w={initial_weight:.3f})")
+        return assoc
+
+    def _stimulate_via_associations(self, active_rep_ids: List[str], strength: float = 1.0) -> List[np.ndarray]:
+        """
+        Erzeuge interne Anregungen basierend auf Assoziationen aus aktiven Repräsentationen.
+        Gibt Liste von Anregungs-Vektoren zurück.
+        """
+        stimulations = []
+        for aid in active_rep_ids:
+            for a in self.associations:
+                if a["from"] == aid:
+                    # Finde Zielrep
+                    to_rep = next((r for r in self.memory if r["id"] == a["to"]), None)
+                    if to_rep is None:
+                        continue
+                    # Erzeuge Stimulation: Zielvekt + weight * avg_path + Rauschen
+                    base = np.array(to_rep["vectors"], dtype=float)
+                    # avg_path ist vector-diff der Dimension (n_concepts, dim) oder flach - wir stored avg_path per-rep as same shape
+                    avg_path = np.array(a["avg_path"], dtype=float)
+                    # Wenn avg_path dimensioniert als (n_concepts, dim), nutze direkt, sonst broadcast
+                    if avg_path.shape == base.shape:
+                        stim = base + a["weight"] * avg_path
+                    else:
+                        # falls flach, broadcast add to each concept vector
+                        try:
+                            flat = avg_path.reshape(base.shape)
+                            stim = base + a["weight"] * flat
+                        except Exception:
+                            stim = base + a["weight"] * np.mean(base, axis=0)
+                    # kleines Rauschen
+                    stim += np.random.normal(0, 0.01, stim.shape) * strength
+                    stimulations.append(stim)
+        return stimulations
+
+    # -------------------------
+    # Haupt-Adjustment der Dimensionalität (erweitert um Memory-Speicherung)
+    # -------------------------
+    def _adjust_dimension(self, pred_error: float):
+        if pred_error > 1.0 and self.dim < self.max_dim:
+            new_dim = min(self.dim + 1, self.max_dim)
+        elif pred_error < 0.2 and self.dim > 3:
+            new_dim = max(self.dim - 1, 3)
+        else:
+            new_dim = self.dim
+
+        if new_dim != self.dim:
+            old_v = self.v.copy()
+            old_meta = self.meta.copy()
+            add_cols = new_dim - self.dim
+            self.v = np.hstack([old_v, np.random.normal(0, 0.1, (len(self.concepts), add_cols))])
+            self.meta = np.hstack([old_meta, np.zeros((len(self.concepts), add_cols))])
+            self.dim = new_dim
+            print(f"[META] Dimension angepasst: {self.dim}")
+            # neue Repräsentation speichern
+            self._store_representation(self.v, weight=0.05, origin="internal", depth=0)
+
+    def presence_metric(self) -> float:
+        norms_meta = np.linalg.norm(self.meta, axis=1)
+        norms_base = np.linalg.norm(self.v, axis=1)
+        return float(np.nanmean(norms_meta / (1.0 + norms_base)))
+
+    # -------------------------
+    # Kern: Lauf, Vergleich externer <-> interner Repräsentationen, Assoziationsbildung, interne Anregung und Speichern
+    # -------------------------
+    def _run_dynamics_and_adapt(self, steps: int, user_input: str) -> Tuple[float, float, List[str]]:
+        v_prev = self.v.copy()
+        total_error = 0.0
+        n = len(self.concepts)
+
+        # Markieren welche Repräsentationen in dieser Episode aktiv sind (für Assoziationen)
+        active_rep_ids = []
+
+        for t in range(steps):
+            mean_v = self.v.mean(axis=0)
+            search_vec = self.real_interface.get_google_search_info(f"Step {t} - {user_input}")
+            if search_vec.shape[0] != self.dim:
+                if search_vec.shape[0] < self.dim:
+                    search_vec = np.tile(search_vec, int(np.ceil(self.dim / search_vec.shape[0])))[:self.dim]
+                else:
+                    search_vec = search_vec[:self.dim]
+
+            comp_factor = self.presence_metric()
+            metrics = self.real_interface.get_real_digital_metrics(f"Step {t}", comp_factor)
+
+            self.v[self.search_idx] = 0.8 * self.v[self.search_idx] + 0.2 * search_vec
+            u_err_vec = metrics[:3] * 0.5 + (self.v[self.search_idx] - self.real_interface.expected_universal_state) * 0.4
+
+            for i in range(n):
+                self.v[i] = self.decay * self.v[i] + 0.02 * self.coupling * (mean_v - self.v[i])
+
+            u_stör = self.v[self.uni_idx]
+            pred = self.v[self.pred_idx]
+            pred_err_vec = u_stör - pred + u_err_vec * 0.2
+            total_error += np.linalg.norm(pred_err_vec)
+
+            self.v[self.pred_idx] += self.learning_rate * pred_err_vec
+            self.v[self.self_idx] += 0.1 * np.abs(pred_err_vec)
+            self.meta = self.meta_factor * (self.v - v_prev)
+            v_prev = self.v.copy()
+
+            # Dynamische Dimension-Anpassung
+            self._adjust_dimension(np.linalg.norm(pred_err_vec))
+
+            # ===========================
+            # Vergleich: aktuelle (extern-angeregte) Repräsentation vs Memory-Repräsentationen
+            # ===========================
+            curr_lengths = self._current_lengths()
+            similar_reps = self._find_similar_reps(curr_lengths)  # sortierte Liste
+
+            # Wir prüfen Paarweise: wenn Fehler kleiner als adaptive Schwelle (dim, depth_of_mem), dann Assoziation
+            for rep in similar_reps:
+                # rep is candidate rep
+                rep_depth = int(rep.get("depth", 0))
+                dim = int(rep["dim"])
+                # compute normalized length error
+                rep_lengths = np.array(rep["lengths"], dtype=float)
+                diff = curr_lengths - rep_lengths
+                normed = np.linalg.norm(diff) / max(1.0, np.linalg.norm(rep_lengths))
+                threshold = self._get_threshold(dim, rep_depth)
+                if normed <= threshold:
+                    # create or update association from current ephemeral "external" to stored rep
+                    # create ephemeral rep object for current (not saved yet)
+                    ephemeral = {
+                        "id": f"ep_{t}_{int(time.time())}",
+                        "dim": self.dim,
+                        "lengths": curr_lengths,
+                        "vectors": self.v.copy(),
+                        "weight": 0.0,
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "origin": "external",
+                        "depth": 0
+                    }
+                    path_vector = (rep["vectors"] - ephemeral["vectors"])  # directional diff
+                    self._create_or_update_association(ephemeral, rep, path_vector, initial_weight=0.02)
+                    # update threshold experience
+                    self._update_threshold(dim, rep_depth, normed)
+
+            # ===========================
+            # Erzeuge interne Anregungen aus aktiven Assoziationen
+            # ===========================
+            # Bestimme welche gespeicherten Repräsentationen relativ aktiv sind (z.B. geringe Distanz zum aktuellen)
+            active_rep_ids = []
+            for rep in self.memory:
+                if rep["dim"] != self.dim:
+                    continue
+                rep_lengths = np.array(rep["lengths"], dtype=float)
+                normed = np.linalg.norm(curr_lengths - rep_lengths) / max(1.0, np.linalg.norm(rep_lengths))
+                if normed < 0.4:  # grobe Aktivitätsschwelle
+                    active_rep_ids.append(rep["id"])
+
+            stimulations = self._stimulate_via_associations(active_rep_ids, strength=0.9)
+
+            # Vergleiche interne Stimulationen mit existierenden Repräsentationen:
+            for stim in stimulations:
+                stim_lengths = np.linalg.norm(stim, axis=1)
+                # finde ähnlichste rep (falls vorhanden)
+                cands = self._find_similar_reps(stim_lengths)
+                if len(cands) > 0:
+                    best = cands[0]
+                    rep_depth = int(best.get("depth", 0))
+                    th = self._get_threshold(best["dim"], rep_depth)
+                    err = np.linalg.norm(stim_lengths - np.array(best["lengths"])) / max(1.0, np.linalg.norm(best["lengths"]))
+                    # Wenn Fehler kleiner als threshold -> verstärke Assoziation zwischen Quelle und best
+                    if err <= th:
+                        # Wir können die Quelle der Stimulation nicht immer rekonstruieren; verstärke allgemein
+                        # Erstelle Kante von best zu best (stärkere Selbstkopplung) oder update existing
+                        path_vec = stim - best["vectors"]
+                        self._create_or_update_association(best, best, path_vec, initial_weight=0.01)
+                        self._update_threshold(best["dim"], rep_depth, err)
+                    else:
+                        # Wenn Fehler größer als Threshold -> neue Repräsentation abspeichern (Prinzip der Abspeicherung)
+                        # Depth: max parent depth + 1 (heuristisch)
+                        parent_depths = [rep.get("depth", 0) for rep in self.memory if rep["dim"] == self.dim]
+                        new_depth = (max(parent_depths) + 1) if parent_depths else 1
+                        self._store_representation(stim, weight=0.08, origin="internal", depth=new_depth)
+                        # adapt threshold for (dim,new_depth) upward a bit because new rep was unexpected
+                        self._update_threshold(self.dim, new_depth, err)
+
+        avg_error = total_error / max(1, steps)
+        avg_presence = self.presence_metric()
+
+        # optional: wenn keine ähnlichen reps, schwach speichern (wie zuvor)
+        if len(self.memory) == 0:
+            self._store_representation(self.v.copy(), weight=0.05, origin="external", depth=0)
+
+        # Präsenz-DF wie vorher
+        df = pd.DataFrame({
+            "concept": self.concepts,
+            "presence": np.linalg.norm(self.meta, axis=1) / (1.0 + np.linalg.norm(self.v, axis=1))
+        })
+        top = df.sort_values("presence", ascending=False)["concept"].head(3).tolist()
+        return avg_error, avg_presence, top
+
+    def run_autonomy_and_generate_code(self, user_input: str, steps: int = 10) -> str:
+        avg_error, avg_presence, top = self._run_dynamics_and_adapt(steps, user_input)
+
+        sem = self.real_interface.interpret_vectors_semantically(top, avg_error, avg_presence, user_input)
+        code = self.code_manipulator.generate_manifest_code(top, avg_presence)
+        prompt = (f"Basierend auf Universal-Fehler {avg_error:.4f} und Präsenz {avg_presence:.4f}, "
+                  f"Fokus: {', '.join(top)}.")
+
+        output = "\n--- SEMANTISCHE DEUTUNG ---\n" + sem
+        output += "\n\n--- MANIFEST (CODE) ---\n" + self.real_interface.generate_statement(prompt, code)
+        return output
+
+
+# ==============================================================================
+# 4. HAUPTPROGRAMM (Kurzer Demo-Lauf)
+# ==============================================================================
+
+if __name__ == "__main__":
+    print("===== MPE-DEMO mit Assoziationen & interner Anregung =====")
+
+    api_key = os.environ.get("OPENAI_API_KEY", "dummy-key")
+    mpe = VektorMPEPredictiveDynamics(["Selbst", "Lernen", "Kohärenz"], api_key,
+                                      simulate=True, tts_enabled=False, max_dim=20, persist_memory=True)
+
+    user_input = "Integration externer Information"
+    result = mpe.run_autonomy_and_generate_code(user_input, steps=6)
+    print(result)
+
+    # Mini-Testlauf
+    err, pres, rel = mpe._run_dynamics_and_adapt(steps=1, user_input="Test")
+    assert isinstance(err, float) and isinstance(pres, float)
+    assert len(rel) <= 3
+    print("✅ Basistests & Assoziations-Mechanik initialisiert.")
