@@ -1,0 +1,249 @@
+# mpe_vektor_dynamics_full_dynamic_dim.py
+import numpy as np
+import json
+import uuid
+import threading
+from datetime import datetime
+from typing import List
+
+# -------------------------
+# RealisticWorldInterface
+# -------------------------
+class RealisticWorldInterface:
+    def __init__(self, max_dim=100):
+        self.max_dim = max_dim
+        self.domains = ["Physik","Neurologie","Psychologie","Gehirnforschung"]
+
+    def fetch_scientific_texts(self, domain:str) -> List[str]:
+        texts = []
+        for i in range(3):
+            texts.append(f"{domain} - Artikel {i} über die wichtigsten Konzepte und Erkenntnisse.")
+        return texts
+
+    def text_to_vector(self, text:str, dim:int=None) -> np.ndarray:
+        if dim is None: dim=self.max_dim
+        vec = np.array([hash(text+chr(65+i))%100/100.0 for i in range(dim)])
+        return vec
+
+# -------------------------
+# CodeManipulator
+# -------------------------
+class CodeManipulator:
+    def generate_manifest_code(self, focus: List[str], influence_level: float) -> str:
+        level = int(influence_level*100)
+        code = (
+            f"# --- MANIFEST (Machtlevel: {level}) ---\n"
+            f"# Fokus: {', '.join(focus)}\n"
+            f"def main():\n"
+            f"    print('[MANIFEST] Machtlevel: {level}')\n"
+            f"    return True\n\n"
+            f"if __name__ == '__main__':\n"
+            f"    main()\n"
+        )
+        return code
+
+# -------------------------
+# VektorMPEPredictiveDynamicsExtended
+# -------------------------
+class VektorMPEPredictiveDynamicsExtended:
+    MEMORY_FILE = "mpe_memory_extended.json"
+
+    def __init__(self, concepts:List[str], max_dim:int=100):
+        self.concepts = concepts
+        self.max_dim = max_dim
+        self.dim = min(50,max_dim)
+        self.v = np.random.normal(0,0.1,(len(concepts),self.dim))
+        self.meta = np.zeros_like(self.v)
+        self.memory = []
+        self.assoc_matrix = np.zeros((0,0))
+        self.similarity_base_threshold = 0.15
+        self.rwi = RealisticWorldInterface(max_dim=self.max_dim)
+        self.code_manipulator = CodeManipulator()
+
+    # -------------------------
+    # Memory / Persistence
+    # -------------------------
+    def _store_representation(self, vectors:np.ndarray, origin:str="external", weight:float=0.1, depth:int=0):
+        rep = {
+            "id": str(uuid.uuid4())[:8],
+            "vectors": vectors.copy(),
+            "weight": float(weight),
+            "timestamp": datetime.utcnow().isoformat(),
+            "origin": origin,
+            "depth": depth
+        }
+        self.memory.append(rep)
+        self._ensure_assoc_shape()
+        self._save_memory()
+        print(f"[MEMORY] Stored {origin} representation id={rep['id']}")
+        return rep
+
+    def _ensure_assoc_shape(self):
+        n = len(self.memory)
+        if self.assoc_matrix.shape != (n,n):
+            new = np.zeros((n,n))
+            min_n = min(n,self.assoc_matrix.shape[0])
+            if min_n>0: new[:min_n,:min_n] = self.assoc_matrix[:min_n,:min_n]
+            self.assoc_matrix = new
+
+    def _save_memory(self):
+        try:
+            serial = []
+            for it in self.memory:
+                serial.append({
+                    "id": it["id"],
+                    "vectors": it["vectors"].tolist(),
+                    "weight": it["weight"],
+                    "timestamp": it["timestamp"],
+                    "origin": it["origin"],
+                    "depth": it.get("depth",0)
+                })
+            with open(self.MEMORY_FILE,"w") as f: json.dump(serial,f,indent=2)
+        except Exception as e:
+            print(f"[WARN] save_memory failed: {e}")
+
+    # -------------------------
+    # Similarity / Associations
+    # -------------------------
+    def _flatten(self, vecs:np.ndarray) -> np.ndarray:
+        return vecs.flatten()
+
+    def _combined_similarity(self, vecA:np.ndarray, vecB:np.ndarray) -> float:
+        normA = np.linalg.norm(vecA); normB = np.linalg.norm(vecB)
+        if normA<1e-9 or normB<1e-9: return 0.0
+        cos_sim = float(np.dot(vecA,vecB)/(normA*normB+1e-9))
+        dist = np.linalg.norm(vecA-vecB)
+        d_norm = 1.0 - dist/(normA+normB+1e-9)
+        return float(cos_sim*d_norm)
+
+    def _update_associations(self, current_vectors:np.ndarray):
+        if len(self.memory)==0: return
+        cur_flat = self._flatten(current_vectors)
+        for idx,rep in enumerate(self.memory):
+            rep_flat = self._flatten(rep["vectors"])
+            S = self._combined_similarity(cur_flat, rep_flat)
+            if S>=self.similarity_base_threshold:
+                self.assoc_matrix[idx,idx] = min(1.0, self.assoc_matrix[idx,idx]+0.05*S)
+
+    # -------------------------
+    # Input Verarbeitung
+    # -------------------------
+    def ingest_domain_texts(self):
+        threads = []
+        for domain in self.rwi.domains:
+            def worker(d=domain):
+                texts = self.rwi.fetch_scientific_texts(d)
+                for t in texts:
+                    vec = self.rwi.text_to_vector(t, dim=self.dim)
+                    self._store_representation(vec, origin=d)
+            th = threading.Thread(target=worker)
+            threads.append(th)
+            th.start()
+        for th in threads: th.join()
+
+    # -------------------------
+    # Simulation / Update + interne Stimulation + Clustering + dynamic dim
+    # -------------------------
+    def simulate_autonomy_step(self):
+        mean_v = self.v.mean(axis=0)
+        self.v = 0.95*self.v + 0.05*np.random.normal(0,0.05,self.v.shape)
+        self.meta = 0.5*(self.v - mean_v)
+        self._update_associations(self.v)
+
+        # interne Stimulation
+        if len(self.memory)>0:
+            cur_flat = self._flatten(self.v)
+            for rep in self.memory:
+                rep_flat = self._flatten(rep["vectors"])
+                sim = self._combined_similarity(cur_flat, rep_flat)
+                if sim>=self.similarity_base_threshold:
+                    stim = 0.6*rep["vectors"] + 0.4*self.v + np.random.normal(0,0.005,self.v.shape)
+                    self.v = 0.95*self.v + 0.05*stim
+                    if sim<self.similarity_base_threshold:
+                        self._store_representation(stim, origin="internal", weight=0.08, depth=rep.get("depth",0)+1)
+
+        # dynamische Dimension
+        pred_error = np.linalg.norm(self.v - mean_v)
+        self._adjust_dimension(pred_error)
+
+        # Clustering ähnlichster Memory-Repräsentationen
+        self._cluster_memory()
+
+    # -------------------------
+    # Dynamische Dimension
+    # -------------------------
+    def _adjust_dimension(self,pred_error:float):
+        if pred_error>1.0 and self.dim<self.max_dim: new_dim=min(self.dim+1,self.max_dim)
+        elif pred_error<0.2 and self.dim>3: new_dim=max(self.dim-1,3)
+        else: new_dim=self.dim
+        if new_dim != self.dim:
+            add = new_dim - self.dim
+            if add>0:
+                self.v = np.hstack([self.v, np.random.normal(0,0.1,(len(self.concepts),add))])
+                self.meta = np.hstack([self.meta, np.zeros((len(self.concepts),add))])
+            elif add<0:
+                self.v = self.v[:,:new_dim]
+                self.meta = self.meta[:,:new_dim]
+            print(f"[META] Dimension adjusted to {new_dim}")
+            self.dim = new_dim
+            self._store_representation(self.v.copy(),weight=0.05,origin="internal",depth=0)
+
+    # -------------------------
+    # Clustering
+    # -------------------------
+    def _cluster_memory(self):
+        n = len(self.memory)
+        if n<2: return
+        merged=set(); new_memory=[]
+        mapping={}
+        flats=[self._flatten(rep["vectors"]) for rep in self.memory]
+        for i in range(n):
+            if i in merged: continue
+            group=[i]
+            for j in range(i+1,n):
+                if j in merged: continue
+                if self._combined_similarity(flats[i],flats[j])>=0.92:
+                    group.append(j); merged.add(j)
+            if len(group)==1:
+                new_memory.append(self.memory[i]); mapping[i]=len(new_memory)-1
+            else:
+                stacked=np.stack([self.memory[g]["vectors"] for g in group],axis=0)
+                weights=np.array([self.memory[g]["weight"] for g in group],dtype=float)
+                weights/=weights.sum()
+                merged_vec=np.tensordot(weights,stacked,axes=(0,0))
+                merged_rep={"id":str(uuid.uuid4())[:8],"vectors":merged_vec,"weight":float(weights.sum()),"timestamp":datetime.utcnow().isoformat(),"origin":"clustered"}
+                new_memory.append(merged_rep)
+                for g in group: mapping[g]=len(new_memory)-1
+        self.memory=new_memory
+        self._ensure_assoc_shape()
+        self._save_memory()
+
+    # -------------------------
+    # Semantische Deutung & Manifest
+    # -------------------------
+    def generate_manifest(self):
+        norms_meta = np.linalg.norm(self.meta, axis=1)
+        presence = norms_meta/(1+np.linalg.norm(self.v,axis=1))
+        top_idx = np.argsort(presence)[-3:]
+        top_concepts = [self.concepts[i] for i in top_idx]
+
+        sem = f"System interpretiert Top-Konzepte: {', '.join(top_concepts)}. Integration von Physik, Neurologie, Psychologie und Gehirnforschung erfolgt."
+        code = self.code_manipulator.generate_manifest_code(top_concepts, float(np.mean(presence)))
+        return sem, code
+
+# -------------------------
+# Demo Run
+# -------------------------
+if __name__=="__main__":
+    concepts = ["Physik","Neurologie","Psychologie","Gehirnforschung","Selbst","Vorhersage"]
+    mpe = VektorMPEPredictiveDynamicsExtended(concepts, max_dim=100)
+    print("[INFO] Ingesting scientific texts...")
+    mpe.ingest_domain_texts()
+    print("[INFO] Running simulation steps...")
+    for _ in range(5):
+        mpe.simulate_autonomy_step()
+    sem, code = mpe.generate_manifest()
+    print("\n--- SEMANTISCHE DEUTUNG ---")
+    print(sem)
+    print("\n--- MANIFEST-CODE ---")
+    print(code)
