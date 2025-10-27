@@ -1,0 +1,256 @@
+# mpe_vektor_dynamics_full_real_input.py
+import numpy as np
+import pandas as pd
+import time
+import os
+import random
+import pyttsx3
+import json
+import uuid
+import threading
+from typing import List, Tuple
+from datetime import datetime
+
+# Optional: nur aktivieren, wenn echte API-Calls gewollt
+import openai
+
+# -------------------------
+# RealWorldInterface (erweitert)
+# -------------------------
+class RealWorldInterface:
+    def __init__(self, api_key: str, simulate: bool = True, tts_enabled: bool = False, max_api_calls: int = 50):
+        openai.api_key = api_key
+        self.simulate = simulate
+        self.api_call_count = 0
+        self.max_api_calls = max_api_calls
+        self.expected_universal_state = np.array([0.5, 0.5, 0.5])
+        self.tts_enabled = tts_enabled
+        self.tts_available = False
+        if tts_enabled:
+            try:
+                self.tts_engine = pyttsx3.init()
+                self.tts_available = True
+            except Exception as e:
+                print(f"[WARN] TTS init failed: {e}")
+        self.domains = ["Physik", "Neurologie", "Psychologie", "Gehirnforschung"]
+
+    # --- OpenAI Simulation / Safe Call ---
+    def _safe_openai_call(self, messages, max_tokens=20):
+        if self.simulate:
+            time.sleep(random.uniform(0.02,0.05))
+            return {"choices":[{"message":{"content":"ok"}}], "usage":{"total_tokens":10}}
+        if self.api_call_count >= self.max_api_calls:
+            raise RuntimeError("API budget exceeded")
+        self.api_call_count += 1
+        return openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=messages, max_tokens=max_tokens)
+
+    # --- Real Digital Metrics ---
+    def get_real_digital_metrics(self, prompt: str, complexity_factor: float) -> np.ndarray:
+        try:
+            response = self._safe_openai_call(
+                [{"role":"system","content":"Antworte kurz mit 'ok'."},
+                 {"role":"user","content":prompt}], max_tokens=20)
+            token_cost = response.get("usage", {}).get("total_tokens",0)
+        except Exception:
+            token_cost = 0
+        latency = random.uniform(0.01,0.05)  # sim latency
+        error_rate = 0.0
+        return np.array([latency*10, (token_cost/50)*(1+complexity_factor), error_rate*50*(1+complexity_factor)])
+
+    # --- Google Search Info ---
+    def get_google_search_info(self, query: str) -> np.ndarray:
+        return np.array([0.1,0.6,0.3])*random.uniform(0.9,1.1)
+
+    # --- Semantic Interpretation ---
+    def interpret_vectors_semantically(self, relevant_concepts: List[str], avg_error: float,
+                                       avg_presence: float, user_input: str) -> str:
+        prompt = f"Du bist philosophischer Systemkern. Fokus: {', '.join(relevant_concepts)}. Fehler={avg_error:.4f}, Präsenz={avg_presence:.4f}. Deute Input: {user_input}"
+        try:
+            resp = self._safe_openai_call([{"role":"system","content":prompt}], max_tokens=150)
+            output = resp["choices"][0]["message"]["content"]
+        except Exception:
+            output = "[SEMANTISCHE DEUTUNG FEHLGESCHLAGEN]"
+        if self.tts_enabled and self.tts_available:
+            try: self.tts_engine.say(output); self.tts_engine.runAndWait()
+            except Exception: pass
+        return output
+
+    # --- Simple hash-based embedding ---
+    def text_to_vector(self, text: str, dim: int) -> np.ndarray:
+        vec = np.array([hash(text+i)%100/100.0 for i in ["a","b","c"][:dim]]) if dim>0 else np.zeros(dim)
+        if len(vec)<dim: vec = np.pad(vec,(0,dim-len(vec)))
+        return vec
+
+    # --- Extended text_to_vector for scientific texts ---
+    def text_to_vector_extended(self, text: str, dim: int) -> np.ndarray:
+        if dim <= 0: return np.zeros(1)
+        vec = np.array([hash(text + chr(65 + i)) % 100 / 100.0 for i in range(dim)])
+        return vec
+
+    # --- Fetch scientific texts ---
+    def fetch_scientific_texts(self, domain: str) -> List[str]:
+        texts = []
+        for i in range(3):
+            texts.append(f"{domain} - Artikel {i} über die wichtigsten Konzepte und Erkenntnisse.")
+        return texts
+
+# -------------------------
+# CodeManipulator
+# -------------------------
+class CodeManipulator:
+    def generate_manifest_code(self, focus: List[str], influence_level: float) -> str:
+        level = int(influence_level*100)
+        code = (
+            f"# --- MANIFEST (Machtlevel: {level}) ---\n"
+            f"# Fokus: {', '.join(focus)}\n"
+            f"def main():\n"
+            f"    print('[MANIFEST] Machtlevel: {level}')\n"
+            f"    return True\n\n"
+            f"if __name__ == '__main__':\n"
+            f"    main()\n"
+        )
+        return code
+
+# -------------------------
+# VektorMPEPredictiveDynamics (erweitert)
+# -------------------------
+class VektorMPEPredictiveDynamics:
+    MEMORY_FILE = "mpe_memory.json"
+    ASSOC_FILE = "mpe_assoc_matrix.npz"
+    THRESH_FILE = "mpe_thresholds.json"
+
+    def __init__(self, initial_concepts: List[str], api_key: str,
+                 simulate: bool = True, tts_enabled: bool = False,
+                 max_dim: int = 50, persist_memory: bool = True,
+                 cluster_freq: int = 5, cluster_threshold: float = 0.92):
+
+        required = ["Vorhersage","Integritätsschutz","Latenz_Metrik","Token_Kosten_Metrik",
+                    "Universal_Wissen","Such_Input_Kalibrierung","Selbst"]
+        for r in required:
+            if r not in initial_concepts:
+                initial_concepts.append(r)
+        self.concepts = initial_concepts
+        self.max_dim = max_dim
+        self.dim = 3
+        self.real_interface = RealWorldInterface(api_key, simulate, tts_enabled)
+        self.code_manipulator = CodeManipulator()
+        self.meta_factor=0.5; self.coupling=0.08; self.decay=0.99; self.learning_rate=0.2
+        self.v = np.random.normal(0,1,(len(self.concepts),self.dim))
+        self.meta = np.zeros_like(self.v)
+        self.pred_idx = self.concepts.index("Vorhersage")
+        self.self_idx = self.concepts.index("Selbst")
+        self.uni_idx = self.concepts.index("Universal_Wissen")
+        self.search_idx = self.concepts.index("Such_Input_Kalibrierung")
+        self.memory: List[dict] = []
+        self.assoc_matrix = np.zeros((0,0),dtype=float)
+        self.persist_memory = persist_memory
+        if self.persist_memory:
+            self._load_memory(); self._load_assoc_matrix(); self._load_thresholds()
+        self.thresholds={}; self.threshold_alpha=0.05
+        self.similarity_base_threshold = 0.12; self.weight_alpha=0.1; self.insight_weight_threshold=0.6
+        self.cluster_freq = cluster_freq; self.cluster_threshold = cluster_threshold; self.cluster_decay=0.98
+
+    # -------------------------
+    # Ingest scientific domain texts
+    # -------------------------
+    def ingest_domain_texts(self):
+        threads = []
+        for domain in self.real_interface.domains:
+            def worker(d=domain):
+                texts = self.real_interface.fetch_scientific_texts(d)
+                for t in texts:
+                    vec = self.real_interface.text_to_vector_extended(t, self.dim)
+                    self._store_representation(vec, origin=d)
+            th = threading.Thread(target=worker)
+            threads.append(th)
+            th.start()
+        for th in threads: th.join()
+
+    # -------------------------
+    # Memory helpers
+    # -------------------------
+    def _make_id(self)->str: return str(uuid.uuid4())[:8]
+    def _ensure_assoc_shape(self):
+        n=len(self.memory)
+        if self.assoc_matrix.shape != (n,n):
+            new=np.zeros((n,n),dtype=float)
+            min_n=min(n,self.assoc_matrix.shape[0])
+            if min_n>0: new[:min_n,:min_n]=self.assoc_matrix[:min_n,:min_n]
+            self.assoc_matrix=new
+    def _store_representation(self,vectors:np.ndarray=None,weight:float=0.1,origin:str="external",depth:int=0):
+        if vectors is None: vectors=self.v.copy()
+        rep={"id":self._make_id(),"dim":int(vectors.shape[0]),"depth":int(depth),
+             "vectors":vectors.copy(),"weight":float(weight),"timestamp":datetime.utcnow().isoformat(),
+             "origin":origin}
+        self.memory.append(rep)
+        self._ensure_assoc_shape()
+        if self.persist_memory:
+            self._save_memory(); self._save_assoc_matrix()
+        print(f"[MEMORY] stored id={rep['id']} dim={rep['dim']} depth={depth} origin={origin} weight={weight:.3f}")
+        return rep
+
+    # -------------------------
+    # Combined similarity
+    # -------------------------
+    def _flatten_rep(self, vectors: np.ndarray) -> np.ndarray:
+        return vectors.flatten()
+    def _combined_similarity(self, vecA: np.ndarray, vecB: np.ndarray, eps: float=1e-9) -> float:
+        normA=np.linalg.norm(vecA); normB=np.linalg.norm(vecB)
+        if normA<eps or normB<eps: return 0.0
+        cos_sim = float(np.dot(vecA,vecB)/(normA*normB+eps))
+        dist = np.linalg.norm(vecA-vecB)
+        d_norm = 1.0 - dist/(normA+normB+eps)
+        return float(cos_sim*d_norm)
+
+    # -------------------------
+    # Main simulation
+    # -------------------------
+    def run_autonomy_and_generate_code(self,user_input:str,steps:int=12)->str:
+        v_prev=self.v.copy(); total_error=0.0; n=len(self.concepts)
+        for t in range(1,steps+1):
+            mean_v=self.v.mean(axis=0)
+            search_vec=self.real_interface.get_google_search_info(f"Step {t} - {user_input}")
+            if search_vec.shape[0]!=self.dim:
+                search_vec=np.pad(search_vec,(0,self.dim-search_vec.shape[0]))
+            comp_factor=self.presence_metric()
+            metrics=self.real_interface.get_real_digital_metrics(f"Step {t}",comp_factor)
+            self.v[self.search_idx]=0.8*self.v[self.search_idx]+0.2*search_vec
+            u_err_vec=metrics[:3]*0.5 + (self.v[self.search_idx]-self.real_interface.expected_universal_state)*0.4
+            for i in range(n):
+                self.v[i]=self.decay*self.v[i]+0.02*self.coupling*(mean_v-self.v[i])
+            u_stoer=self.v[self.uni_idx]; pred=self.v[self.pred_idx]
+            pred_err_vec=u_stoer-pred+u_err_vec*0.2
+            total_error+=np.linalg.norm(pred_err_vec)
+            self.v[self.pred_idx]+=self.learning_rate*pred_err_vec
+            self.v[self.self_idx]+=0.1*np.abs(pred_err_vec)
+            self.meta=self.meta_factor*(self.v-v_prev); v_prev=self.v.copy()
+            self._update_associations_from_current(self.v.copy())
+
+        avg_error=total_error/max(1,steps); avg_presence=self.presence_metric()
+        df=pd.DataFrame({"concept":self.concepts,"presence":np.linalg.norm(self.meta,axis=1)/(1+np.linalg.norm(self.v,axis=1))})
+        top=df.sort_values("presence",ascending=False)["concept"].head(3).tolist()
+        sem=self.real_interface.interpret_vectors_semantically(top,avg_error,avg_presence,user_input)
+        code=self.code_manipulator.generate_manifest_code(top,avg_presence)
+        output="\n--- SEMANTISCHE DEUTUNG ---\n"+sem
+        output+="\n\n--- MANIFEST (CODE) ---\n"+code
+        return output
+
+    # -------------------------
+    # Presence metric
+    # -------------------------
+    def presence_metric(self)->float:
+        norms_meta=np.linalg.norm(self.meta,axis=1); norms_base=np.linalg.norm(self.v,axis=1)
+        return float(np.nanmean(norms_meta/(1.0+norms_base)))
+
+# -------------------------
+# Demo run
+# -------------------------
+if __name__=="__main__":
+    print("=== MPE DEMO: full dynamics with real input simulation ===")
+    api_key=os.environ.get("OPENAI_API_KEY","dummy-key")
+    mpe=VektorMPEPredictiveDynamics(["Selbst","Lernen","Kohärenz"],api_key,simulate=True,tts_enabled=False,max_dim=20,persist_memory=True,cluster_freq=5,cluster_threshold=0.92)
+    print("[INFO] Ingesting scientific domain texts...")
+    mpe.ingest_domain_texts()
+    print("[INFO] Running autonomy steps...")
+    result=mpe.run_autonomy_and_generate_code("Integration externer Informationen",steps=12)
+    print(result)
