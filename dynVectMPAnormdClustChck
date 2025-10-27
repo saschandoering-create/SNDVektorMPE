@@ -1,0 +1,634 @@
+# mpe_vektor_dynamics_with_assoc_and_clustering.py
+import numpy as np
+import pandas as pd
+import time
+import os
+import random
+import pyttsx3
+import json
+import uuid
+from typing import List, Tuple
+from datetime import datetime
+
+# Optional: Nur aktivieren, wenn echte API-Calls gewollt
+import openai
+
+# -------------------------
+# RealWorldInterface (wie zuvor, leicht komprimiert)
+# -------------------------
+class RealWorldInterface:
+    def __init__(self, api_key: str, simulate: bool = True, tts_enabled: bool = False, max_api_calls: int = 50):
+        openai.api_key = api_key
+        self.simulate = simulate
+        self.api_call_count = 0
+        self.max_api_calls = max_api_calls
+        self.expected_universal_state = np.array([0.5, 0.5, 0.5])
+        self.tts_enabled = tts_enabled
+        self.tts_available = False
+        if tts_enabled:
+            try:
+                self.tts_engine = pyttsx3.init()
+                self.tts_available = True
+            except Exception as e:
+                print(f"[WARN] TTS init failed: {e}")
+
+    def _safe_openai_call(self, messages, max_tokens=20):
+        if self.simulate:
+            time.sleep(random.uniform(0.02, 0.08))
+            return {"choices":[{"message":{"content":"ok"}}], "usage":{"total_tokens":10}}
+        if self.api_call_count >= self.max_api_calls:
+            raise RuntimeError("API budget exceeded")
+        self.api_call_count += 1
+        return openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=messages, max_tokens=max_tokens)
+
+    def get_real_digital_metrics(self, prompt: str, complexity_factor: float) -> np.ndarray:
+        start = time.time()
+        error_rate, token_cost = 0.0, 0.0
+        try:
+            response = self._safe_openai_call(
+                [{"role":"system", "content":"Antworte kurz mit 'ok'."},
+                 {"role":"user","content":prompt}], max_tokens=20)
+            latency = time.time() - start
+            token_cost = response.get("usage", {}).get("total_tokens", 0)
+        except Exception:
+            latency = time.time() - start
+            error_rate = 1.0
+        return np.array([latency * 10, (token_cost / 50.0) * (1 + complexity_factor), error_rate * 50 * (1 + complexity_factor)])
+
+    def get_google_search_info(self, query: str) -> np.ndarray:
+        return np.array([0.1, 0.6, 0.3]) * random.uniform(0.9, 1.1)
+
+    def interpret_vectors_semantically(self, relevant_concepts: List[str], avg_error: float,
+                                       avg_presence: float, user_input: str) -> str:
+        system_prompt = (f"Du bist ein philosophischer Systemkern. Fokus: {', '.join(relevant_concepts)}. "
+                         f"Fehler: {avg_error:.4f}, Präsenz: {avg_presence:.4f}.")
+        user_prompt = f"Deute den Input '{user_input}' abstrakt."
+        try:
+            response = self._safe_openai_call(
+                [{"role":"system","content":system_prompt},
+                 {"role":"user","content":user_prompt}], max_tokens=150)
+            output = response["choices"][0]["message"]["content"]
+        except Exception as e:
+            output = f"[SEMANTISCHE DEUTUNG FEHLGESCHLAGEN] Fehler: {e}"
+        if self.tts_enabled and self.tts_available:
+            try:
+                self.tts_engine.say(output); self.tts_engine.runAndWait()
+            except Exception:
+                pass
+        return output
+
+    def generate_statement(self, prompt: str, code: str) -> str:
+        return f"\n{prompt}\n\n{code}"
+
+# -------------------------
+# CodeManipulator (wie zuvor)
+# -------------------------
+class CodeManipulator:
+    def generate_manifest_code(self, focus: List[str], influence_level: float) -> str:
+        level = int(influence_level * 100)
+        code = (
+            f"# --- MANIFEST (Machtlevel: {level}) ---\n"
+            f"# Fokus: {', '.join(focus)}\n"
+            f"def main():\n"
+            f"    print('[MANIFEST] Machtlevel: {level}')\n"
+            f"    return True\n\n"
+            f"if __name__ == '__main__':\n"
+            f"    main()\n"
+        )
+        return code
+
+# -------------------------
+# VektorMPEPredictiveDynamics mit komb. Ähnlichkeitsmaß & Clustering
+# -------------------------
+class VektorMPEPredictiveDynamics:
+    MEMORY_FILE = "mpe_memory.json"
+    ASSOC_FILE = "mpe_assoc_matrix.npz"
+    THRESH_FILE = "mpe_thresholds.json"
+
+    def __init__(self, initial_concepts: List[str], api_key: str,
+                 simulate: bool = True, tts_enabled: bool = False,
+                 max_dim: int = 50, persist_memory: bool = True,
+                 cluster_freq: int = 5, cluster_threshold: float = 0.92):
+        # baseline concepts
+        required = ["Vorhersage","Integritätsschutz","Latenz_Metrik","Token_Kosten_Metrik",
+                    "Universal_Wissen","Such_Input_Kalibrierung","Selbst"]
+        for r in required:
+            if r not in initial_concepts:
+                initial_concepts.append(r)
+        self.concepts = initial_concepts
+        self.max_dim = max_dim
+        self.dim = 3
+        self.real_interface = RealWorldInterface(api_key, simulate, tts_enabled)
+        self.code_manipulator = CodeManipulator()
+
+        # params
+        self.meta_factor = 0.5
+        self.coupling = 0.08
+        self.decay = 0.99
+        self.learning_rate = 0.2
+
+        # states
+        self.v = np.random.normal(0,1,(len(self.concepts), self.dim))
+        self.meta = np.zeros_like(self.v)
+
+        # indices
+        self.pred_idx = self.concepts.index("Vorhersage")
+        self.self_idx = self.concepts.index("Selbst")
+        self.uni_idx = self.concepts.index("Universal_Wissen")
+        self.search_idx = self.concepts.index("Such_Input_Kalibrierung")
+
+        # memory / associations
+        # memory entries: dicts with id, dim, depth, vectors (n_concepts x dim), weight, lengths(flattened), timestamp
+        self.memory: List[dict] = []
+        self.assoc_matrix = np.zeros((0,0), dtype=float)  # NxN adjacency weights between memory items
+        self.persist_memory = persist_memory
+        if self.persist_memory:
+            self._load_memory()
+            self._load_assoc_matrix()
+            self._load_thresholds()
+
+        # thresholds per (dim,depth)
+        self.thresholds = {}
+        self.threshold_alpha = 0.05
+
+        # other hyperparams
+        self.similarity_base_threshold = 0.12
+        self.weight_alpha = 0.1
+        self.insight_weight_threshold = 0.6
+
+        # clustering params
+        self.cluster_freq = cluster_freq
+        self.cluster_threshold = cluster_threshold  # high similarity -> merge
+        self.cluster_decay = 0.98  # weight retention after merge
+
+    # -------------------------
+    # Persistence helpers
+    # -------------------------
+    def _save_memory(self):
+        if not self.persist_memory: return
+        try:
+            serial = []
+            for it in self.memory:
+                serial.append({
+                    "id": it["id"],
+                    "dim": int(it["dim"]),
+                    "depth": int(it.get("depth",0)),
+                    "vectors": [list(map(float,row)) for row in it["vectors"]],
+                    "weight": float(it.get("weight",0.1)),
+                    "timestamp": it.get("timestamp","")
+                })
+            with open(self.MEMORY_FILE,"w",encoding="utf-8") as f:
+                json.dump(serial,f,indent=2)
+        except Exception as e:
+            print(f"[WARN] save_memory failed: {e}")
+
+    def _load_memory(self):
+        if not os.path.exists(self.MEMORY_FILE):
+            return
+        try:
+            with open(self.MEMORY_FILE,"r",encoding="utf-8") as f:
+                serial = json.load(f)
+            self.memory = []
+            for it in serial:
+                self.memory.append({
+                    "id": it["id"],
+                    "dim": int(it["dim"]),
+                    "depth": int(it.get("depth",0)),
+                    "vectors": np.array(it["vectors"],dtype=float),
+                    "weight": float(it.get("weight",0.1)),
+                    "timestamp": it.get("timestamp","")
+                })
+        except Exception as e:
+            print(f"[WARN] load_memory failed: {e}")
+
+    def _save_assoc_matrix(self):
+        if not self.persist_memory: return
+        try:
+            np.savez(self.ASSOC_FILE, assoc=self.assoc_matrix)
+        except Exception as e:
+            print(f"[WARN] save_assoc failed: {e}")
+
+    def _load_assoc_matrix(self):
+        if not os.path.exists(self.ASSOC_FILE):
+            self.assoc_matrix = np.zeros((len(self.memory), len(self.memory)), dtype=float)
+            return
+        try:
+            data = np.load(self.ASSOC_FILE)
+            self.assoc_matrix = data["assoc"]
+            # if memory resized since save, adjust
+            if self.assoc_matrix.shape != (len(self.memory), len(self.memory)):
+                new = np.zeros((len(self.memory), len(self.memory)), dtype=float)
+                min_n = min(new.shape[0], self.assoc_matrix.shape[0])
+                new[:min_n,:min_n] = self.assoc_matrix[:min_n,:min_n]
+                self.assoc_matrix = new
+        except Exception as e:
+            print(f"[WARN] load_assoc failed: {e}")
+            self.assoc_matrix = np.zeros((len(self.memory), len(self.memory)), dtype=float)
+
+    def _save_thresholds(self):
+        if not self.persist_memory: return
+        try:
+            with open(self.THRESH_FILE,"w",encoding="utf-8") as f:
+                json.dump(self.thresholds,f,indent=2)
+        except Exception as e:
+            print(f"[WARN] save_thresholds failed: {e}")
+
+    def _load_thresholds(self):
+        if not os.path.exists(self.THRESH_FILE):
+            self.thresholds = {}
+            return
+        try:
+            with open(self.THRESH_FILE,"r",encoding="utf-8") as f:
+                self.thresholds = json.load(f)
+        except Exception:
+            self.thresholds = {}
+
+    # -------------------------
+    # Utility: flatten representation to 1D vector for similarity
+    # -------------------------
+    def _flatten_rep(self, vectors: np.ndarray) -> np.ndarray:
+        # vectors shape (n_concepts, dim)
+        return vectors.flatten()
+
+    # -------------------------
+    # Combined similarity: cosine * normed-distance (result roughly -1..+1)
+    # -------------------------
+    def _combined_similarity(self, vecA: np.ndarray, vecB: np.ndarray, eps: float = 1e-9) -> float:
+        # both are 1D flattened arrays
+        normA = np.linalg.norm(vecA)
+        normB = np.linalg.norm(vecB)
+        if normA < eps or normB < eps:
+            return 0.0
+        cos_sim = float(np.dot(vecA, vecB) / (normA * normB + eps))
+        dist = np.linalg.norm(vecA - vecB)
+        d_norm = 1.0 - dist / (normA + normB + eps)
+        return float(cos_sim * d_norm)
+
+    # -------------------------
+    # Memory store and assoc_matrix management
+    # -------------------------
+    def _make_id(self) -> str:
+        return str(uuid.uuid4())[:8]
+
+    def _ensure_assoc_shape(self):
+        n = len(self.memory)
+        if self.assoc_matrix.shape != (n,n):
+            new = np.zeros((n,n), dtype=float)
+            min_n = min(n, self.assoc_matrix.shape[0])
+            if min_n > 0:
+                new[:min_n, :min_n] = self.assoc_matrix[:min_n, :min_n]
+            self.assoc_matrix = new
+
+    def _store_representation(self, vectors: np.ndarray = None, weight: float = 0.1, origin: str = "external", depth: int = 0):
+        if vectors is None:
+            vectors = self.v.copy()
+        rep = {
+            "id": self._make_id(),
+            "dim": int(vectors.shape[1]),
+            "depth": int(depth),
+            "vectors": vectors.copy(),
+            "weight": float(weight),
+            "timestamp": datetime.utcnow().isoformat(),
+            "origin": origin
+        }
+        self.memory.append(rep)
+        self._ensure_assoc_shape()
+        self._save_memory()
+        self._save_assoc_matrix()
+        print(f"[MEMORY] stored id={rep['id']} dim={rep['dim']} depth={depth} origin={origin} weight={weight:.3f}")
+        return rep
+
+    # -------------------------
+    # Thresholds per (dim,depth)
+    # -------------------------
+    def _threshold_key(self, dim: int, depth: int) -> str:
+        return f"{dim}:{depth}"
+
+    def _get_threshold(self, dim: int, depth: int, default: float = None) -> float:
+        if default is None:
+            default = self.similarity_base_threshold
+        key = self._threshold_key(dim, depth)
+        if key not in self.thresholds:
+            self.thresholds[key] = default
+        return float(self.thresholds[key])
+
+    def _update_threshold(self, dim: int, depth: int, observed: float):
+        key = self._threshold_key(dim, depth)
+        old = float(self.thresholds.get(key, observed))
+        new = (1 - self.threshold_alpha) * old + self.threshold_alpha * observed
+        self.thresholds[key] = float(new)
+        self._save_thresholds()
+
+    # -------------------------
+    # Associations update based on similarity pairs
+    # -------------------------
+    def _update_associations_from_current(self, current_vectors: np.ndarray):
+        """
+        Compare current external activation with all memory items and update association weights.
+        Also create associations if similarity surpasses adaptive threshold.
+        """
+        if len(self.memory) == 0:
+            return
+        cur_flat = self._flatten_rep(current_vectors)
+        for idx, rep in enumerate(self.memory):
+            rep_flat = self._flatten_rep(rep["vectors"])
+            S = self._combined_similarity(cur_flat, rep_flat)
+            # For association decision we compare S to threshold mapped from rep dim/depth
+            thr = self._get_threshold(rep["dim"], rep["depth"], default=self.similarity_base_threshold)
+            # Convert S in [-1,1] to positive metric in [0,1] for weight update
+            score = max(0.0, (S + 1.0) / 2.0)
+            if S >= thr:
+                # create/strengthen assoc: ephemeral -> rep (we use row for ephemeral appended at end? Instead update existing rep self-loop)
+                # We'll strengthen self-loop and symmetric connections with other high-scoring reps
+                old_w = self.assoc_matrix[idx, idx]
+                self.assoc_matrix[idx, idx] = min(1.0, old_w + 0.02 * score)
+                # small symmetric boost across other top reps
+                # also update threshold experience
+                self._update_threshold(rep["dim"], rep["depth"], S)
+        # persist assoc matrix
+        self._save_assoc_matrix()
+
+    # -------------------------
+    # Generate internal excitations using assoc_matrix
+    # -------------------------
+    def _generate_internal_excitations(self, active_rep_indices: List[int], strength: float = 1.0) -> List[np.ndarray]:
+        """
+        For each active memory index, we create an internal excitation as weighted sum of target reps
+        using assoc_matrix row weights (or column weights).
+        Returns list of stimulation matrices (n_concepts x dim)
+        """
+        stims = []
+        if len(self.memory) == 0:
+            return stims
+        self._ensure_assoc_shape()
+        for i in active_rep_indices:
+            # row i contains weights to all targets
+            weights = self.assoc_matrix[i, :]
+            if np.sum(weights) <= 1e-9:
+                continue
+            # weighted sum of target vectors
+            stacked = np.stack([rep["vectors"] for rep in self.memory], axis=0)  # (N, n_concepts, dim)
+            # compute weighted sum over first axis -> (n_concepts, dim)
+            stim = np.tensordot(weights, stacked, axes=(0,0))
+            # blend with source vec (self.memory[i]) to preserve continuity
+            stim = 0.6 * stim + 0.4 * self.memory[i]["vectors"]
+            # scale by strength and add small noise
+            stim = stim * strength + np.random.normal(0, 0.005, stim.shape)
+            stims.append(stim)
+        return stims
+
+    # -------------------------
+    # Clustering / consolidation of similar representations
+    # -------------------------
+    def _cluster_representations(self):
+        """
+        Pairwise similarity matrix among memory entries using combined similarity.
+        Merge pairs with similarity > cluster_threshold.
+        Merging: weighted average (by weights) of vectors and weights combined.
+        Update assoc_matrix accordingly.
+        """
+        n = len(self.memory)
+        if n < 2:
+            return
+        flats = [self._flatten_rep(rep["vectors"]) for rep in self.memory]
+        merged = set()
+        new_memory = []
+        mapping_old_to_new = {}
+        i = 0
+        while i < n:
+            if i in merged:
+                i += 1; continue
+            rep_i = self.memory[i]
+            group = [i]
+            for j in range(i+1, n):
+                if j in merged: continue
+                S = self._combined_similarity(flats[i], flats[j])
+                if S >= self.cluster_threshold:
+                    group.append(j)
+                    merged.add(j)
+            if len(group) == 1:
+                # keep as is
+                new_memory.append(rep_i)
+                mapping_old_to_new[i] = len(new_memory)-1
+            else:
+                # merge group into one rep
+                # weighted average by rep["weight"]
+                weights = np.array([self.memory[g]["weight"] for g in group], dtype=float)
+                if np.sum(weights) == 0:
+                    weights = np.ones_like(weights)
+                weights = weights / np.sum(weights)
+                # stack vectors and compute weighted mean
+                stacked = np.stack([self.memory[g]["vectors"] for g in group], axis=0)  # (k, n_concepts, dim)
+                merged_vec = np.tensordot(weights, stacked, axes=(0,0))
+                merged_weight = float(np.sum([self.memory[g]["weight"] for g in group]) * self.cluster_decay)
+                merged_rep = {
+                    "id": self._make_id(),
+                    "dim": int(merged_vec.shape[1]),
+                    "depth": int(max(self.memory[g].get("depth",0) for g in group)),
+                    "vectors": merged_vec,
+                    "weight": merged_weight,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "origin": "clustered"
+                }
+                new_memory.append(merged_rep)
+                new_idx = len(new_memory)-1
+                for g in group:
+                    mapping_old_to_new[g] = new_idx
+            i += 1
+
+        # Rebuild assoc_matrix for new_memory via mapping: aggregate weights
+        new_n = len(new_memory)
+        new_assoc = np.zeros((new_n, new_n), dtype=float)
+        # accumulate old assoc weights into new matrix indices (average by counts)
+        count_map = {}
+        for old_i in range(n):
+            ni = mapping_old_to_new.get(old_i)
+            for old_j in range(n):
+                nj = mapping_old_to_new.get(old_j)
+                if ni is None or nj is None: continue
+                new_assoc[ni, nj] += self.assoc_matrix[old_i, old_j]
+                count_map[(ni,nj)] = count_map.get((ni,nj), 0) + 1
+        # normalize by counts
+        for (ni,nj), cnt in count_map.items():
+            if cnt > 0:
+                new_assoc[ni,nj] /= cnt
+        # replace memory and assoc matrix
+        self.memory = new_memory
+        self.assoc_matrix = new_assoc
+        self._save_memory()
+        self._save_assoc_matrix()
+        print(f"[CLUSTER] Consolidated memory -> new size {len(self.memory)}")
+
+    # -------------------------
+    # adjust dimension (as earlier), but store rep on change
+    # -------------------------
+    def _adjust_dimension(self, pred_error: float):
+        if pred_error > 1.0 and self.dim < self.max_dim:
+            new_dim = min(self.dim + 1, self.max_dim)
+        elif pred_error < 0.2 and self.dim > 3:
+            new_dim = max(self.dim - 1, 3)
+        else:
+            new_dim = self.dim
+        if new_dim != self.dim:
+            old_v = self.v.copy(); old_meta = self.meta.copy()
+            add = new_dim - self.dim
+            self.v = np.hstack([old_v, np.random.normal(0,0.1,(len(self.concepts), add))])
+            self.meta = np.hstack([old_meta, np.zeros((len(self.concepts), add))])
+            self.dim = new_dim
+            print(f"[META] Dimension adjusted to {self.dim}")
+            # store an internal representation after structural change
+            self._store_representation(self.v.copy(), weight=0.05, origin="internal", depth=0)
+
+    # -------------------------
+    # presence metric
+    # -------------------------
+    def presence_metric(self) -> float:
+        norms_meta = np.linalg.norm(self.meta, axis=1)
+        norms_base = np.linalg.norm(self.v, axis=1)
+        return float(np.nanmean(norms_meta / (1.0 + norms_base)))
+
+    # -------------------------
+    # main dynamics loop: integrates external + internal excitations + assoc updates + clustering
+    # -------------------------
+    def _run_dynamics_and_adapt(self, steps: int, user_input: str) -> Tuple[float, float, List[str]]:
+        v_prev = self.v.copy(); total_error = 0.0; n = len(self.concepts)
+        # iteration-level bookkeeping for clustering frequency
+        for t in range(1, steps + 1):
+            mean_v = self.v.mean(axis=0)
+            search_vec = self.real_interface.get_google_search_info(f"Step {t} - {user_input}")
+            if search_vec.shape[0] != self.dim:
+                if search_vec.shape[0] < self.dim:
+                    search_vec = np.tile(search_vec, int(np.ceil(self.dim / search_vec.shape[0])))[:self.dim]
+                else:
+                    search_vec = search_vec[:self.dim]
+            comp_factor = self.presence_metric()
+            metrics = self.real_interface.get_real_digital_metrics(f"Step {t}", comp_factor)
+
+            self.v[self.search_idx] = 0.8 * self.v[self.search_idx] + 0.2 * search_vec
+            u_err_vec = metrics[:3] * 0.5 + (self.v[self.search_idx] - self.real_interface.expected_universal_state) * 0.4
+
+            for i in range(n):
+                self.v[i] = self.decay * self.v[i] + 0.02 * self.coupling * (mean_v - self.v[i])
+
+            u_stoer = self.v[self.uni_idx]
+            pred = self.v[self.pred_idx]
+            pred_err_vec = u_stoer - pred + u_err_vec * 0.2
+            total_error += np.linalg.norm(pred_err_vec)
+
+            self.v[self.pred_idx] += self.learning_rate * pred_err_vec
+            self.v[self.self_idx] += 0.1 * np.abs(pred_err_vec)
+            self.meta = self.meta_factor * (self.v - v_prev)
+            v_prev = self.v.copy()
+
+            # dynamic dim adjust
+            self._adjust_dimension(np.linalg.norm(pred_err_vec))
+
+            # ---------------------------
+            # external vs memory comparison -> update associations
+            # ---------------------------
+            self._update_associations_from_current(self.v.copy())
+
+            # ---------------------------
+            # determine active reps (those similar enough to current)
+            # ---------------------------
+            active_idxs = []
+            if len(self.memory) > 0:
+                curr_flat = self._flatten_rep(self.v)
+                for idx, rep in enumerate(self.memory):
+                    if rep["dim"] != self.dim:
+                        continue
+                    S = self._combined_similarity(curr_flat, self._flatten_rep(rep["vectors"]))
+                    # activity threshold lower to be inclusive
+                    if S >= 0.0:
+                        active_idxs.append(idx)
+
+            # ---------------------------
+            # generate internal stimulations via assoc_matrix and handle them
+            # ---------------------------
+            stims = self._generate_internal_excitations(active_idxs, strength=0.9)
+            for stim in stims:
+                # blend stimulation into current v dynamics
+                self.v = 0.95 * self.v + 0.05 * stim  # small coupling so internal thoughts influence state
+                # compare stim to memory: if too dissimilar -> store as new internal rep
+                if len(self.memory) > 0:
+                    stim_flat = self._flatten_rep(stim)
+                    # compute best match similarity
+                    sims = [self._combined_similarity(stim_flat, self._flatten_rep(rep["vectors"])) for rep in self.memory if rep["dim"] == self.dim]
+                    if len(sims) == 0:
+                        # no same-dim memory -> store
+                        self._store_representation(stim, weight=0.08, origin="internal", depth=1)
+                    else:
+                        best_sim = max(sims)
+                        # if similarity lower than threshold for best rep -> store new rep
+                        if best_sim < self.similarity_base_threshold:
+                            # determine new depth heuristically
+                            parent_depths = [rep.get("depth",0) for rep in self.memory if rep["dim"] == self.dim]
+                            new_depth = max(parent_depths) + 1 if parent_depths else 1
+                            self._store_representation(stim, weight=0.08, origin="internal", depth=new_depth)
+                        else:
+                            # strengthen associations towards best matches
+                            # find indices of reps with similarity above small thr
+                            for idx, rep in enumerate(self.memory):
+                                if rep["dim"] != self.dim: continue
+                                sim = self._combined_similarity(self._flatten_rep(rep["vectors"]), stim_flat)
+                                if sim >= self.similarity_base_threshold:
+                                    # increment assoc weight between rep and itself slightly (self-loop) or between rep and other targets
+                                    self.assoc_matrix[idx, idx] = min(1.0, self.assoc_matrix[idx, idx] + 0.01 * ((sim+1)/2))
+                                    self._update_threshold(rep["dim"], rep.get("depth",0), sim)
+            # persist assoc modifications occasionally
+            if t % 10 == 0:
+                self._save_assoc_matrix()
+
+            # ---------------------------
+            # clustering check (simulate brain-sleep consolidation regularly)
+            # ---------------------------
+            if t % self.cluster_freq == 0:
+                try:
+                    self._cluster_representations()
+                except Exception as e:
+                    print(f"[WARN] clustering failed: {e}")
+
+        avg_error = total_error / max(1, steps)
+        avg_presence = self.presence_metric()
+
+        # fallback: if memory empty, store current weakly
+        if len(self.memory) == 0:
+            self._store_representation(self.v.copy(), weight=0.05, origin="external", depth=0)
+
+        # return top concepts as before
+        df = pd.DataFrame({
+            "concept": self.concepts,
+            "presence": np.linalg.norm(self.meta, axis=1) / (1.0 + np.linalg.norm(self.v, axis=1))
+        })
+        top = df.sort_values("presence", ascending=False)["concept"].head(3).tolist()
+        return avg_error, avg_presence, top
+
+    # -------------------------
+    # public API
+    # -------------------------
+    def run_autonomy_and_generate_code(self, user_input: str, steps: int = 10) -> str:
+        avg_error, avg_presence, top = self._run_dynamics_and_adapt(steps, user_input)
+        sem = self.real_interface.interpret_vectors_semantically(top, avg_error, avg_presence, user_input)
+        code = self.code_manipulator.generate_manifest_code(top, avg_presence)
+        prompt = (f"Basierend auf Universal-Fehler {avg_error:.4f} und Präsenz {avg_presence:.4f}, "
+                  f"Fokus: {', '.join(top)}.")
+        output = "\n--- SEMANTISCHE DEUTUNG ---\n" + sem
+        output += "\n\n--- MANIFEST (CODE) ---\n" + self.real_interface.generate_statement(prompt, code)
+        return output
+
+# -------------------------
+# Demo run
+# -------------------------
+if __name__ == "__main__":
+    print("=== MPE DEMO: assoc + combined-similarity + clustering ===")
+    api_key = os.environ.get("OPENAI_API_KEY", "dummy-key")
+    mpe = VektorMPEPredictiveDynamics(["Selbst","Lernen","Kohärenz"], api_key,
+                                      simulate=True, tts_enabled=False,
+                                      max_dim=20, persist_memory=True,
+                                      cluster_freq=5, cluster_threshold=0.92)
+    result = mpe.run_autonomy_and_generate_code("Integration externer Information", steps=12)
+    print(result)
+    # quick verification run
+    err, pres, rel = mpe._run_dynamics_and_adapt(steps=1, user_input="Test")
+    print("err, pres:", err, pres)
+    print("=> memory size:", len(mpe.memory))
